@@ -113,6 +113,12 @@ that process is alive and needs no assertion once it is gone. The other paths ha
 pid to check: **never pass `--claim` unless the user has confirmed the original
 session has exited.**
 
+## Splitting a topic
+
+If a topic has grown two subjects, split it: `topic fork` gives one thread its own
+topic, seeded with a brief, while the parent keeps running. The `fork` skill has the
+procedure. `topic whoami` names the topic the current session is sitting in.
+
 ## Removing topics
 
 - `topic forget "<name>"` — stop tracking a topic you are done with. Refuses while it

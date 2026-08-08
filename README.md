@@ -52,10 +52,9 @@ topic up "<name>" [dir] --seed-from <file>    # start a NEW topic from a brief
 ```
 
 `--seed-from` seeds a brand-new topic with a document — a handoff doc, an `ideas/`
-note, an issue write-up. It is what makes a **split** possible: hand one thread off
-to the existing topic, and start a second topic from its own brief, each in its own
-working directory. Ignored (with a warning) if the topic already has a session to
-resume.
+note, an issue write-up. Ignored (with a warning) if the topic already has a session
+to resume. For splitting a thread out of a topic you are *in*, use `fork` below,
+which wraps this and records the lineage.
 
 `forget` is the disposal path for one topic you have decided you are done with. It
 refuses while the topic is up, keeps the handoff documents unless you pass `--purge`
@@ -114,6 +113,45 @@ from a finished one.
 Handoff docs are kept permanently in `~/.claude/topics/<slug>/handoffs/`. Retired
 session UUIDs are archived in the topic's `history`, so an old session is still
 resumable in an emergency.
+
+### Fork — split a thread into its own topic
+
+A topic that has grown two subjects should be two topics. `fork` takes one thread out
+of the topic you are in and gives it its own name, session, and context — while the
+parent keeps running.
+
+```bash
+# from inside the session being split
+p=$(topic fork-path "Fantasy Images")   # where the brief goes
+# ...write the brief to $p...
+topic fork "Fantasy Images" --from "Fantasy Economics"
+```
+
+The `fork` skill drives this from `/fork "<Topic Name>" <what to extract>` — the
+session writes the brief itself, since only it holds the context.
+
+The pieces `--seed-from` alone left to convention:
+
+- **Lineage is recorded both ways.** The child gets `forkedFrom` and `seededFrom`,
+  the parent gains the child in `forks`. `topic status` shows both.
+- **The child inherits the parent's working directory** unless you pass one. Without
+  that it would land in `$PWD` — which, when you fork remotely through the
+  Dispatcher, is the Dispatcher's home rather than the work.
+- **`--from` defaults to the calling topic**, via `topic whoami`.
+
+Briefs live permanently in `~/.claude/topics/<slug>/briefs/`, kept separate from
+`handoffs/` because they are a different genre: a handoff doc looks back over a
+topic's own history, a brief looks forward and is the child's origin document. It has
+to carry everything — the child has no shared history to fall back on.
+
+Forking does **not** remove the thread from the parent's context; it only stops the
+parent being the only place it lives. Hand the parent off afterwards if it should
+start clean. `topic fork` prints that command rather than running it, since it would
+terminate the session you are sitting in.
+
+```bash
+topic whoami          # which topic am I in? (reads the tmux session name)
+```
 
 ### The Dispatcher
 

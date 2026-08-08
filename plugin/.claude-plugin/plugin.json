@@ -1,7 +1,7 @@
 {
   "name": "topics",
-  "version": "0.1.0",
-  "description": "Pick up, put down, and hand off long-running Claude Code topics. A topic is a stable name that outlives the session beneath it, so work can be resumed, set aside, or handed to a fresh session without losing the salient context. Wraps the `topic` CLI.",
+  "version": "0.2.0",
+  "description": "Pick up, put down, hand off, and fork long-running Claude Code topics. A topic is a stable name that outlives the session beneath it, so work can be resumed, set aside, split into a new topic, or handed to a fresh session without losing the salient context. Wraps the `topic` CLI.",
   "author": {
     "name": "Brett Adam"
   }

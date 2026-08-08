@@ -38,6 +38,10 @@ With no focus given, write a general handoff covering all live threads evenly. I
 session covered several substantial unrelated threads and the user has not said which
 matters, ask before writing — a mis-scoped handoff is expensive to recover from.
 
+If the session's context is cluttered because it is carrying **two subjects**, and
+both are still live, that is a fork, not a handoff — see the `fork` skill. A handoff
+keeps one topic and refreshes its session; a fork splits one topic into two.
+
 ## Which case is this?
 
 **Case A — hand off THIS session.** You are the session being handed off. You write
