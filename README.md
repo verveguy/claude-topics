@@ -7,7 +7,6 @@ Two tools plus a Claude Code plugin:
 
 | Piece | What it is |
 |-------|------------|
-| `ccs` | Start a named Claude Code session in a detached tmux session, optionally with Remote Control |
 | `topic` | Manage **topics**: stable names that outlive the session beneath them |
 | `topics` plugin | Skills (`handoff`, `topic-manage`) so Claude knows the procedures |
 
@@ -21,8 +20,7 @@ from your phone while travelling. Two things go wrong:
 2. **You can't start new work remotely.** If you need a session that isn't already
    running, you're stuck until you're back at the machine.
 
-`ccs` fixes (2). `topic` fixes (1), by making the unit of work a *topic* rather than
-a session — the name stays stable while the session underneath is resumed, retired,
+`topic` fixes both, by making the unit of work a *topic* rather than a session — the name stays stable while the session underneath is resumed, retired,
 or replaced.
 
 ## Install
@@ -40,29 +38,23 @@ on your `PATH`.
 `./install.sh --uninstall` removes the links and the launchd agent. It deliberately
 leaves `~/.claude/topics/` alone — that's your registry and handoff docs, not the tool.
 
-## `ccs` — one-off named sessions
+## `topic` — the tool
 
 ```bash
-ccs [-r|--remote] "<session name>" [directory]
+topic up     "<name>" [dir]   # pick up: resume the topic's session, or start one
+topic down   "<name>"         # put down: terminate, but stay resumable
+topic list                    # what's up, what's down
+topic status "<name>"         # dir, session UUID, generation, retired sessions
+topic forget "<name>"         # stop tracking it (keeps handoff docs)
 ```
 
-Creates a **detached** tmux session running Claude Code, past the workspace-trust
-prompt and ready to attach. With `-r`, the session also gets Remote Control.
+`forget` is the disposal path. It refuses while the topic is up, keeps the handoff
+documents unless you pass `--purge` (they are often the only surviving record of what
+a topic was about), and never touches the session itself — it stays resumable with
+`claude --resume <uuid>`.
 
 ```bash
-ccs "trip session" ~/dev/myrepo          # at home, before leaving
-ssh home -t tmux attach -t "trip session" # from anywhere
-```
-
-Use `ccs` for ad-hoc work. Use `topic` for anything you'll pick up more than once.
-
-## `topic` — the main tool
-
-```bash
-topic up   "<name>" [dir]   # pick up: resume the topic's session, or start one
-topic down "<name>"         # put down: terminate, but stay resumable
-topic list                  # what's up, what's down
-topic status "<name>"       # dir, session UUID, generation, retired sessions
+ssh home -t tmux attach -t "<name>"       # attach to any topic over SSH
 ```
 
 Each topic is backed by a stable session UUID, so `up` after `down` is a genuine
@@ -160,7 +152,7 @@ Learned the hard way; don't re-derive them.
 - **`~/.claude/sessions/<pid>.json`** is the authoritative live-session record —
   `name`, `sessionId`, `cwd`, `tmux`. Best starting point for any "which session is
   this?" question.
-- **Session start-up detection is text-matching.** `ccs` and `topic` poll the pane
+- **Session start-up detection is text-matching.** `topic` polls the pane
   for the trust prompt or a readiness banner (`Welcome back` / `remote-control is
   active`). Claude Code's startup text has changed twice already — suspect this first
   if launches hang for the full timeout.
@@ -168,7 +160,6 @@ Learned the hard way; don't re-derive them.
 ## Layout
 
 ```
-bin/ccs                    session launcher
 bin/topic                  topic manager
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session

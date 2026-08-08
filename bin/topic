@@ -9,6 +9,8 @@
 #   topic down "<name>"         Put down: terminate the session, stay resumable.
 #   topic list                  Show every topic and whether it is up or down.
 #   topic status "<name>"       Detail for one topic.
+#   topic forget "<name>"       Stop tracking a topic (keeps handoff docs; --purge
+#                               removes them). The session itself is untouched.
 #
 #   topic handoff-path "<name>" Print where the handoff doc must be written.
 #   topic handoff-swap "<name>" Retire the old session, start a fresh one seeded
@@ -304,6 +306,43 @@ cmd_handoff_swap() {
   echo "\"$name\" is up on a fresh session (${new_sid:0:8}…). Old session archived in history."
 }
 
+# Unregister a topic. Handoff docs are KEPT by default — they are often the only
+# surviving record of what a topic was about, and "stop tracking this" should not
+# mean "destroy the history". --purge removes them too.
+cmd_forget() {
+  local name="" purge=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --purge) purge=1; shift ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || die "usage: topic forget \"<name>\" [--purge]"
+
+  local d; d="$(topic_dir "$name")"
+  [[ -f "$d/topic.json" ]] || die "no such topic: \"$name\""
+  is_up "$name" && die "\"$name\" is still up — \`topic down \"$name\"\` first"
+  [[ "$(reg_read "$name" state)" == "adopted" ]] &&
+    echo "note: \"$name\" was adopted; its original session may still be running." >&2
+
+  local sid n
+  sid="$(reg_read "$name" sessionId)"
+  n="$(ls -1 "$d/handoffs"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+
+  if [[ $purge -eq 1 ]]; then
+    rm -rf "$d"
+    echo "Forgot \"$name\" and purged $n handoff doc(s)."
+  else
+    rm -f "$d/topic.json"
+    rmdir "$d" 2>/dev/null || true   # succeeds only if nothing else remains
+    echo "Forgot \"$name\"."
+    [[ "$n" -gt 0 ]] && echo "  Kept $n handoff doc(s) in $d/handoffs/ (--purge to remove)."
+  fi
+  # The session itself is untouched and still resumable directly.
+  [[ -n "$sid" ]] && echo "  Session $sid is untouched: claude --resume $sid"
+  return 0
+}
+
 # Adopt an already-running session that topic did not launch.
 #
 # We need the session's UUID so a later `topic up` can --resume it, and a running
@@ -426,6 +465,7 @@ usage() {
 case "${1:-}" in
   up)                shift; cmd_up "$@" ;;
   adopt)             shift; cmd_adopt "$@" ;;
+  forget)            shift; cmd_forget "$@" ;;
   down)              shift; cmd_down "$@" ;;
   list|ls)           shift; cmd_list "$@" ;;
   status)            shift; cmd_status "$@" ;;

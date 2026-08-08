@@ -54,7 +54,7 @@ When the user asks you — as the Dispatcher — to act on another topic, just r
 
 ## Adopting an existing session
 
-A session started outside topic management (plain `claude`, or via `ccs`) can be
+A session started outside topic management (a plain `claude` invocation) can be
 brought under management, but it is a **two-step** process with a real hazard.
 
 To adopt, we need the session's UUID. A running session does not hold its transcript

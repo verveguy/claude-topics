@@ -30,9 +30,7 @@ if [[ $UNINSTALL -eq 1 ]]; then
   echo "Uninstalling…"
   launchctl unload "$PLIST_DEST" 2>/dev/null || true
   rm -f "$PLIST_DEST"; say "removed $PLIST_DEST"
-  for f in ccs topic; do
-    [[ -L "$BIN/$f" ]] && { rm -f "$BIN/$f"; say "removed $BIN/$f"; }
-  done
+  [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
   echo "Left in place (deliberately — this is your data, not the tool):"
@@ -60,7 +58,6 @@ link() {
 
 echo "Installing from $REPO"
 mkdir -p "$BIN"
-link "$REPO/bin/ccs"   "$BIN/ccs"
 link "$REPO/bin/topic" "$BIN/topic"
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
