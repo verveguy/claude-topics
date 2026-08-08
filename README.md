@@ -151,15 +151,36 @@ name; if that doesn't leave exactly one, `topic` lists the live sessions with th
 `--pid` needed to disambiguate. Records linger after a session exits, so liveness is
 re-checked against the pid.
 
-Two fallbacks remain. `--session-id <uuid>` when the UUID is already known (a session
-adopting *itself*), and `--probe` when the target has **no live record** — it exited,
-or its record is unreadable. A running session doesn't hold its transcript open, so
-the probe path instead sends it a unique token and finds which transcript that token
-landed in:
+**A session that has exited can be adopted too** — anything `claude --resume` lists.
+Its name is in its own transcript, as `custom-title` records, which is where
+`--resume` reads it from. Same command; `topic` falls through to this automatically
+when nothing live matches:
+
+```bash
+topic adopt "Fantasy UX"                      # a resumable session, not running
+topic adopt "<name>" --title "<resume name>"  # topic name differs from the title
+```
+
+Sessions get **renamed**, and every rename stamps a new title, so only the *last* one
+counts — a session titled "Fantasy UX" early on and "Fantasy OpenAI" now is not a
+match. If several sessions genuinely share the title, `topic` lists them newest-first
+with the `--session-id` to pick one. There is no process to claim, so the topic lands
+in the ordinary `down` state and `topic up` simply resumes it.
+
+The scan greps every transcript (~5s over 800MB here), so it is deliberately the
+fallback, not the first thing tried.
+
+`--probe` remains for a session that is running but *unnamed* — nothing to match on
+in either direction. A running session doesn't hold its transcript open, so the probe
+path sends it a unique token and finds which transcript that token landed in:
 
 ```bash
 topic adopt "<name>" --probe <token> --exclude <your-own-session-uuid>
 ```
+
+`--session-id <uuid>` takes a UUID you already know — a session adopting *itself*, or
+your pick from an ambiguous list. It works for live and exited sessions alike:
+`topic` checks whether that UUID is currently running and registers it accordingly.
 
 `adopt` is non-destructive — it only records the UUID, directory, and pid.
 
@@ -171,6 +192,9 @@ on one transcript, which corrupts it.
 topic up "<name>"           # after adoption via a live record
 topic up "<name>" --claim   # after --probe / --session-id adoption
 ```
+
+This step only applies to a session that is actually **running**. Adopting a
+resumable, exited session needs no claim at all — it is already `down`.
 
 Adoption through a live record stores the pid, so `topic up` can *see* the original:
 it refuses outright while that process is alive (`--claim` will not override it), and
@@ -196,6 +220,13 @@ Learned the hard way; don't re-derive them.
   `name`, `sessionId`, `cwd`, `tmux`. Best starting point for any "which session is
   this?" question, and what `topic adopt` reads. Records are **not** removed when a
   session exits, so always re-check the pid before trusting one.
+- **A session's name survives its process, inside its own transcript.** Transcripts
+  carry `{"type":"custom-title","customTitle":"..."}` records — that is the name
+  `claude --resume` lists. A **rename appends another one**, so the *last* record is
+  the current name and earlier ones are names since abandoned. They also record their
+  own `cwd`, which is the right way to recover a session's directory: de-mangling the
+  `~/.claude/projects` slug is ambiguous for any hyphenated directory
+  (`-Users-me-dev-claude-topics`).
 - **`pipefail` + `set -e` turns a missing directory into a silent abort.** `ls`/`find`
   over an absent path exits non-zero inside a command substitution, and the script
   dies with no output and nothing done. `topic forget` failed exactly this way for

@@ -70,7 +70,21 @@ topic adopt "<name>" --dir <dir>     # or narrow by working directory
 If that leaves more than one candidate, the command lists the live sessions with the
 `--pid` to use — it never guesses. Prefer this path; it needs no round trip.
 
-Use `--probe` only when the target has **no live record** (it has exited):
+**A session that has exited** — one `claude --resume` lists — is adopted the same
+way. `topic` falls through to matching the name against the `custom-title` records in
+each transcript, which is where `--resume` gets its names. Only a session's *last*
+title counts, since renames stamp new ones.
+
+```bash
+topic adopt "Fantasy UX"                      # not running, still resumable
+topic adopt "<name>" --title "<resume name>"  # topic name differs from the title
+```
+
+Such a topic is registered `down`, not `adopted` — there is no process to claim, so
+`topic up "<name>"` just resumes it. The scan reads every transcript and takes a few
+seconds; that is why it is the fallback.
+
+Use `--probe` only when the target is running but **unnamed** — nothing to match on:
 
 1. `ListAgents`, then `SendMessage` the target a unique token, e.g.
    `ADOPT-PROBE-<random>`, asking it to simply acknowledge and change nothing.

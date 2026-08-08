@@ -14,10 +14,11 @@
 #                               removes them). The session itself is untouched.
 #   topic prune                 Show topics that are truly dead — down, with no
 #                               transcript left to resume. --yes removes them.
-#   topic adopt "<name>"        Track a session topic did not launch, by reading
-#                               ~/.claude/sessions/<pid>.json. --pid / --dir
-#                               disambiguate; --probe <token> handles a session
-#                               with no live record.
+#   topic adopt "<name>"        Track a session topic did not launch — live (via
+#                               ~/.claude/sessions/<pid>.json) or merely resumable
+#                               (via its transcript title). --pid / --dir / --title
+#                               disambiguate; --probe <token> handles a running but
+#                               unnamed session.
 #
 #   topic handoff-path "<name>" Print where the handoff doc must be written.
 #   topic handoff-swap "<name>" Retire the old session, start a fresh one seeded
@@ -404,6 +405,19 @@ transcript_of() {
   find "$HOME/.claude/projects" -name "$uuid.jsonl" -print -quit 2>/dev/null || printf ''
 }
 
+# The working directory a transcript recorded for itself. More reliable than
+# de-mangling the project slug, which is ambiguous for any hyphenated directory.
+cwd_of() {
+  [[ -f "${1:-}" ]] || { printf ''; return 0; }
+  python3 -c '
+import json, sys
+for line in open(sys.argv[1]):
+    if "\"cwd\"" not in line: continue
+    try: c = json.loads(line).get("cwd")
+    except Exception: continue
+    if c: print(c); break' "$1"
+}
+
 # Remove topics that are truly dead — down, and with no transcript left to resume.
 # Dry-run by default: nothing is deleted until --yes.
 #
@@ -473,6 +487,95 @@ for f in sorted(glob.glob(os.path.expanduser("~/.claude/sessions/*.json"))):
     print("\t".join(str(x) for x in (pid, sid, d.get("cwd",""), d.get("name",""))))'
 }
 
+# A session that has EXITED still carries its name: the transcript holds
+# `{"type":"custom-title","customTitle":"..."}` records, and that is the name
+# `claude --resume` lists it under. The title is re-stamped on every rename, so the
+# LAST one is the current name — an early record may be a name since abandoned.
+# The transcript also records its own `cwd`, which beats de-mangling the project
+# slug (that is ambiguous for any directory containing a hyphen).
+#
+# Emits, newest first: uuid \t cwd \t last-modified
+sessions_by_title() {
+  local want="$1"
+  # grep narrows to plausible files first; a 25MB transcript is cheap to scan but
+  # there are many of them.
+  local f last cwd
+  # Two greps per candidate beat scanning multi-megabyte transcripts line by line
+  # in Python — this runs on every `topic adopt`.
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    last="$(grep -F '"type":"custom-title"' "$f" 2>/dev/null | tail -1 || true)"
+    [[ -n "$last" ]] || continue
+    python3 -c '
+import json, os, sys, time
+f, want, last = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    if json.loads(last).get("customTitle") != want: sys.exit(0)   # renamed away
+except Exception: sys.exit(0)
+print("\t".join((os.path.basename(f)[:-6], sys.argv[4],
+                 time.strftime("%Y-%m-%d %H:%M", time.localtime(os.stat(f).st_mtime)))))' \
+      "$f" "$want" "$last" "$(cwd_of "$f")"
+  done < <(grep -rl --include='*.jsonl' -F "\"customTitle\":\"$want\"" "$HOME/.claude/projects" 2>/dev/null || true) \
+    | sort -t'	' -k3,3r
+}
+
+# Adopt a session that has EXITED but is still resumable — the ones `claude --resume`
+# lists. There is no process to claim, so the topic lands in the ordinary `down`
+# state: `topic up` just resumes it, no --claim dance.
+#
+#   adopt_resumable <topic-name> <title-override> <dir> [--quiet]
+#
+# --quiet: return 1 instead of dying when nothing matches, so the live-session path
+# can fall through to this speculatively. Ambiguity is still reported either way —
+# that means we DID find it and the user only needs to pick.
+adopt_resumable() {
+  local name="$1" title="${2:-}" dir="${3:-}" quiet="${4:-}"
+  [[ -n "$title" ]] || title="$name"
+
+  local rows=() row
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    [[ -n "$dir" && "$(printf '%s' "$row" | cut -f2)" != "$dir" ]] && continue
+    rows+=("$row")
+  done < <(sessions_by_title "$title")
+
+  if [[ ${#rows[@]} -eq 0 ]]; then
+    [[ "$quiet" == "--quiet" ]] && return 1
+    echo "adopt: no live session and no resumable session titled \"$title\"." >&2
+    echo "  Titles come from the session's own transcript — check \`claude --resume\`." >&2
+    echo "  If it is named differently there: topic adopt \"$name\" --title \"<that name>\"" >&2
+    die "nothing to adopt"
+  fi
+
+  if [[ ${#rows[@]} -gt 1 ]]; then
+    echo "adopt: ${#rows[@]} resumable sessions are titled \"$title\" — pick one:" >&2
+    for row in "${rows[@]}"; do
+      printf '  --session-id %s  last active %s  %s\n' \
+        "$(printf '%s' "$row" | cut -f1)" \
+        "$(printf '%s' "$row" | cut -f3)" \
+        "$(printf '%s' "$row" | cut -f2)" >&2
+    done
+    die "expected exactly one match (newest listed first)"
+  fi
+
+  local uuid cwd seen
+  uuid="$(printf '%s' "${rows[0]}" | cut -f1)"
+  cwd="$(printf '%s' "${rows[0]}" | cut -f2)"
+
+  # It should not be running — the live path would have caught it — but the title
+  # may differ from the advertised name, so check the UUID before calling it down.
+  seen="$(live_sessions || true)"
+  if [[ "$seen" == *"	$uuid	"* ]]; then
+    die "adopt: session ${uuid:0:8}… is currently RUNNING — adopt it live: topic adopt \"$name\" --pid <pid>"
+  fi
+
+  reg_write "$name" name "$name" dir "${dir:-${cwd:-$HOME}}" sessionId "$uuid" \
+            generation "1" state "down" adoptedAt "$(now_iso)"
+  echo "Adopted \"$name\" -> session ${uuid:0:8}… (resumable, titled \"$title\", dir: ${dir:-${cwd:-$HOME}})"
+  echo "  Not running, so nothing to claim. Pick it up with:"
+  echo "    topic up \"$name\""
+}
+
 # Adopt an already-running session that topic did not launch.
 #
 # Preferred path: read ~/.claude/sessions/<pid>.json, which already knows the
@@ -490,27 +593,45 @@ for f in sorted(glob.glob(os.path.expanduser("~/.claude/sessions/*.json"))):
 #   topic adopt "<name>" --probe <token> [--dir <dir>] [--exclude <uuid>]
 cmd_adopt() {
   local name="${1:?usage: topic adopt \"<name>\" [--pid <pid>] [--dir <dir>] | --probe <token>}"; shift
-  local probe="" dir="" exclude="" pid=""
+  local probe="" dir="" exclude="" pid="" title=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --probe)      probe="$2"; shift 2 ;;
       --dir)        dir="$2"; shift 2 ;;
       --pid)        pid="$2"; shift 2 ;;
+      --title)      title="$2"; shift 2 ;;
       --exclude)    exclude="$2"; shift 2 ;;
       --session-id) known_uuid="$2"; shift 2 ;;
       *) die "adopt: unexpected argument: $1" ;;
     esac
   done
 
-  # A session that already knows its own UUID (e.g. adopting itself) can skip the
-  # probe entirely.
+  # A session whose UUID is already known — a session adopting itself, or the user
+  # picking one out of an ambiguous list.
   if [[ -n "${known_uuid:-}" ]]; then
-    local kdir="${dir:-$PWD}"
-    reg_write "$name" name "$name" dir "$kdir" sessionId "$known_uuid" \
-              generation "1" state "adopted" adoptedAt "$(now_iso)"
-    echo "Adopted \"$name\" -> session ${known_uuid:0:8}… (dir: $kdir)"
-    echo "  Running OUTSIDE topic management. Exit it, then:"
-    echo "    topic up \"$name\" --claim"
+    local seen kpid="" kdir="$dir"
+    seen="$(live_sessions || true)"
+    kpid="$(printf '%s\n' "$seen" | grep -F "	$known_uuid	" | cut -f1 || true)"
+
+    if [[ -z "$kdir" ]]; then
+      # The transcript records its own cwd; fall back to $PWD only if it has none.
+      local t; t="$(transcript_of "$known_uuid")"
+      [[ -n "$t" ]] && kdir="$(cwd_of "$t")"
+      [[ -n "$kdir" ]] || kdir="$PWD"
+    fi
+
+    if [[ -n "$kpid" ]]; then
+      reg_write "$name" name "$name" dir "$kdir" sessionId "$known_uuid" \
+                generation "1" state "adopted" adoptedAt "$(now_iso)" adoptedPid "$kpid"
+      echo "Adopted \"$name\" -> session ${known_uuid:0:8}… (pid $kpid, dir: $kdir)"
+      echo "  Still running OUTSIDE topic management. Exit it, then: topic up \"$name\""
+    else
+      # Not running: an ordinary resumable session, nothing to claim.
+      reg_write "$name" name "$name" dir "$kdir" sessionId "$known_uuid" \
+                generation "1" state "down" adoptedAt "$(now_iso)"
+      echo "Adopted \"$name\" -> session ${known_uuid:0:8}… (resumable, dir: $kdir)"
+      echo "  Not running, so nothing to claim. Pick it up with: topic up \"$name\""
+    fi
     return 0
   fi
 
@@ -522,8 +643,8 @@ cmd_adopt() {
       all+=("$row")
     done < <(live_sessions)
 
-    [[ ${#all[@]} -gt 0 ]] ||
-      die "adopt: no live sessions found in ~/.claude/sessions — if the target has exited, use --probe"
+    # Nothing live at all: go straight to the resumable-session path.
+    [[ ${#all[@]} -gt 0 ]] || { adopt_resumable "$name" "$title" "$dir"; return $?; }
 
     # Narrow progressively; keep the last filter that left at least one candidate.
     rows=("${all[@]}")
@@ -548,8 +669,22 @@ cmd_adopt() {
     [[ -n "$dir" ]] && _narrow 3 "$dir"
     _narrow 4 "$name"
 
+    # Live sessions exist but none is ours — the target is probably a resumable
+    # session that has exited. Try that before making the user disambiguate.
+    if [[ ${#rows[@]} -ne 1 ]] && adopt_resumable "$name" "$title" "$dir" --quiet; then
+      return 0
+    fi
+
     if [[ ${#rows[@]} -ne 1 ]]; then
-      echo "adopt: ${#rows[@]} live sessions match — disambiguate with --pid (or --dir):" >&2
+      # Distinguish "your filters left several" from "nothing matched at all" — the
+      # resumable-session fallback has already come up empty by this point.
+      if [[ ${#rows[@]} -eq ${#all[@]} && -z "$pid" && -z "$dir" ]]; then
+        echo "adopt: no live session named \"$name\", and no resumable session titled" >&2
+        echo "  \"${title:-$name}\". Pick a live one with --pid, or --title if it is" >&2
+        echo "  listed under a different name in \`claude --resume\`:" >&2
+      else
+        echo "adopt: ${#rows[@]} live sessions match — disambiguate with --pid (or --dir):" >&2
+      fi
       for row in "${rows[@]}"; do
         printf '  --pid %-7s %-40s %s\n' \
           "$(printf '%s' "$row" | cut -f1)" \
