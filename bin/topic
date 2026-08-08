@@ -1,0 +1,437 @@
+#!/usr/bin/env bash
+# topic — pick up / put down / hand off long-running Claude Code "topics".
+#
+# A TOPIC is a stable name ("Fantasy Economics") that outlives any single Claude
+# session. The session underneath gets recycled; the topic name does not. That is
+# what makes hand-off possible.
+#
+#   topic up   "<name>" [dir]   Pick up: resume the topic's session, or start one.
+#   topic down "<name>"         Put down: terminate the session, stay resumable.
+#   topic list                  Show every topic and whether it is up or down.
+#   topic status "<name>"       Detail for one topic.
+#
+#   topic handoff-path "<name>" Print where the handoff doc must be written.
+#   topic handoff-swap "<name>" Retire the old session, start a fresh one seeded
+#                               with the handoff doc, same topic name.
+#
+#   topic ensure-dispatcher     Start the Dispatcher topic if it is not up.
+#                               (Run by launchd at login and every 5 minutes.)
+#
+# Each topic is backed by a stable session UUID, so `up` is a lossless --resume.
+# Every session is started with BOTH --remote-control "<name>" and --name "<name>".
+# Both are required and they do different jobs:
+#   --remote-control  makes the session reachable from claude.ai / your phone
+#   --name            sets the display name other Claude sessions see in
+#                     ListAgents (without it a local session advertises itself
+#                     as an auto-derived "<dir>-<hash>" and is unaddressable
+#                     by topic name — verified 2026-08-08)
+#
+# Singleton: at most one live session per topic, enforced by an exact-match tmux
+# check plus an atomic lock. Starting a topic that is already up is a no-op.
+set -euo pipefail
+
+TOPICS_ROOT="${CLAUDE_TOPICS_ROOT:-$HOME/.claude/topics}"
+DISPATCHER_NAME="${CLAUDE_DISPATCHER_NAME:-Dispatcher}"
+
+# launchd gives us a minimal PATH; make sure the tools we need are findable.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+die() { echo "topic: $*" >&2; exit 1; }
+
+command -v tmux   >/dev/null || die "tmux not found on PATH"
+command -v claude >/dev/null || die "claude not found on PATH"
+command -v python3 >/dev/null || die "python3 not found on PATH"
+
+# ---------------------------------------------------------------- names & paths
+
+# "Fantasy Economics" -> "fantasy-economics" (registry directory name)
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'
+}
+
+# tmux forbids ':' and '.' in session names; the display name keeps them.
+tmux_name() { printf '%s' "$1" | tr ':.' '--'; }
+
+topic_dir()  { printf '%s/%s' "$TOPICS_ROOT" "$(slugify "$1")"; }
+topic_json() { printf '%s/topic.json' "$(topic_dir "$1")"; }
+
+# ---------------------------------------------------------------- registry (JSON)
+
+reg_read() {  # reg_read <name> <key> -> value or ""
+  local f; f="$(topic_json "$1")"
+  [[ -f "$f" ]] || { printf ''; return 0; }
+  python3 -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: d={}
+v=d.get(sys.argv[2],"")
+print(v if v is not None else "")' "$f" "$2"
+}
+
+reg_write() {  # reg_write <name> <k> <v> [<k> <v> ...]
+  local name="$1"; shift
+  local f; f="$(topic_json "$name")"
+  mkdir -p "$(dirname "$f")"
+  python3 -c '
+import json,os,sys
+f=sys.argv[1]
+try: d=json.load(open(f))
+except Exception: d={}
+kv=sys.argv[2:]
+for i in range(0,len(kv),2): d[kv[i]]=kv[i+1]
+tmp=f+".tmp"
+json.dump(d,open(tmp,"w"),indent=2)
+os.replace(tmp,f)' "$f" "$@"
+}
+
+reg_push_history() {  # reg_push_history <name> <sessionId> <handoffDoc>
+  local f; f="$(topic_json "$1")"
+  python3 -c '
+import json,os,sys,datetime
+f,sid,doc=sys.argv[1],sys.argv[2],sys.argv[3]
+try: d=json.load(open(f))
+except Exception: d={}
+d.setdefault("history",[]).append({
+  "sessionId": sid, "handoffDoc": doc,
+  "retiredAt": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+})
+tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' "$f" "$2" "$3"
+}
+
+now_iso() { date +%Y-%m-%dT%H:%M:%S%z; }
+
+# ---------------------------------------------------------------- liveness
+
+is_up() { tmux has-session -t "=$(tmux_name "$1")" 2>/dev/null; }
+
+# Atomic per-topic lock so two callers can't race a topic up at once.
+lock_acquire() {
+  local d="$TOPICS_ROOT/.locks"; mkdir -p "$d"
+  LOCK_PATH="$d/$(slugify "$1").lock"
+  if ! mkdir "$LOCK_PATH" 2>/dev/null; then
+    # Stale lock older than 5 minutes is reclaimed.
+    if [[ -n "$(find "$LOCK_PATH" -maxdepth 0 -mmin +5 2>/dev/null)" ]]; then
+      rmdir "$LOCK_PATH" 2>/dev/null || true
+      mkdir "$LOCK_PATH" 2>/dev/null || die "could not acquire lock for \"$1\""
+    else
+      die "\"$1\" is being started by another process (lock held)"
+    fi
+  fi
+  trap 'rmdir "$LOCK_PATH" 2>/dev/null || true' EXIT
+}
+
+# ---------------------------------------------------------------- launching
+
+# launch_session <display-name> <dir> <claude-args...>
+# Creates a detached tmux session and sends the claude command into it.
+# send-keys (not `tmux new -d claude`) so the shell survives claude exiting.
+launch_session() {
+  local name="$1" dir="$2"; shift 2
+  local tn; tn="$(tmux_name "$name")"
+
+  mkdir -p "$dir"; dir="$(cd "$dir" && pwd)"
+
+  local cmd="claude"
+  local a; for a in "$@"; do cmd+=" $(printf '%q' "$a")"; done
+
+  tmux new-session -d -s "$tn" -c "$dir"
+  tmux send-keys -t "$tn" "$cmd" Enter
+
+  # Auto-accept the workspace trust prompt if it appears; otherwise wait for a
+  # readiness marker. NOTE: this heuristic keys on Claude Code's startup text and
+  # has needed updating before — suspect it first if startup detection misbehaves.
+  printf "  starting"
+  local i pane
+  for i in $(seq 1 40); do
+    pane="$(tmux capture-pane -t "$tn" -p 2>/dev/null || true)"
+    if printf '%s' "$pane" | grep -q "trust this folder"; then
+      sleep 0.3; tmux send-keys -t "$tn" Enter; printf " (trust accepted)"; break
+    fi
+    if printf '%s' "$pane" | grep -qiE "Welcome back|remote-control is active"; then
+      break
+    fi
+    sleep 0.5; printf "."
+  done
+  echo
+}
+
+# Gracefully stop the claude process in a topic's tmux session, then kill it.
+stop_session() {
+  local tn; tn="$(tmux_name "$1")"
+  tmux has-session -t "=$tn" 2>/dev/null || return 0
+  # Escape interrupts any in-flight turn; /exit quits Claude cleanly so the
+  # transcript is flushed. Transcripts are written incrementally, so even a hard
+  # kill stays resumable — this is just the tidy path.
+  tmux send-keys -t "$tn" Escape 2>/dev/null || true
+  sleep 0.4
+  tmux send-keys -t "$tn" "/exit" Enter 2>/dev/null || true
+  local i
+  for i in $(seq 1 12); do
+    tmux has-session -t "=$tn" 2>/dev/null || return 0
+    if ! tmux list-panes -t "=$tn" -F '#{pane_current_command}' 2>/dev/null | grep -qi claude; then
+      break
+    fi
+    sleep 0.5
+  done
+  tmux kill-session -t "=$tn" 2>/dev/null || true
+}
+
+new_uuid() { uuidgen | tr '[:upper:]' '[:lower:]'; }
+
+# ---------------------------------------------------------------- commands
+
+cmd_up() {
+  local name="" dir="" claim=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --claim) claim=1; shift ;;
+      *) if [[ -z "$name" ]]; then name="$1"; else dir="$1"; fi; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || die "usage: topic up \"<name>\" [dir] [--claim]"
+
+  lock_acquire "$name"
+
+  # An adopted topic still has its ORIGINAL process running outside tmux. Starting
+  # here would --resume the same session UUID in a second process: two writers on
+  # one transcript, which corrupts it. We cannot detect that process reliably (the
+  # transcript is not held open, and an idle session does not write), so refuse by
+  # default and make the caller assert the original is gone.
+  if [[ "$(reg_read "$name" state)" == "adopted" && $claim -eq 0 ]]; then
+    echo "\"$name\" was adopted but not yet claimed." >&2
+    echo "" >&2
+    echo "  Its original session is running OUTSIDE tmux. Starting it here would" >&2
+    echo "  resume the same session UUID in a second process and corrupt the" >&2
+    echo "  transcript." >&2
+    echo "" >&2
+    echo "  1. Exit the original session (/exit in its window)." >&2
+    echo "  2. topic up \"$name\" --claim" >&2
+    die "refusing to start until the original session has exited"
+  fi
+
+  if is_up "$name"; then
+    echo "\"$name\" is already up."
+    echo "  attach: tmux attach -t \"$(tmux_name "$name")\""
+    return 0
+  fi
+
+  local recorded_dir sid
+  recorded_dir="$(reg_read "$name" dir)"
+  [[ -z "$dir" ]] && dir="${recorded_dir:-$PWD}"
+  sid="$(reg_read "$name" sessionId)"
+
+  if [[ -n "$sid" ]]; then
+    echo "Picking up \"$name\" (resuming session ${sid:0:8}…) in $dir"
+    launch_session "$name" "$dir" --remote-control "$name" --name "$name" --resume "$sid"
+  else
+    sid="$(new_uuid)"
+    echo "Starting \"$name\" (new session ${sid:0:8}…) in $dir"
+    launch_session "$name" "$dir" --remote-control "$name" --name "$name" --session-id "$sid"
+    reg_write "$name" name "$name" generation "1"
+  fi
+
+  reg_write "$name" name "$name" dir "$dir" sessionId "$sid" \
+            state "up" lastPickedUp "$(now_iso)"
+  echo "\"$name\" is up. Remote Control name: \"$name\""
+}
+
+cmd_down() {
+  local name="${1:?usage: topic down \"<name>\"}"
+  if ! is_up "$name"; then
+    # An adopted session runs outside tmux, so we cannot stop it for the user.
+    # Say so plainly rather than reporting a false "already down".
+    if [[ "$(reg_read "$name" state)" == "adopted" ]]; then
+      echo "\"$name\" was adopted and is running OUTSIDE tmux — topic cannot stop it."
+      echo "  Exit that session yourself (/exit in its window), then:"
+      echo "    topic up \"$name\"   # relaunches it under topic management, resuming context"
+      return 0
+    fi
+    echo "\"$name\" is already down."
+    return 0
+  fi
+  echo "Putting down \"$name\"…"
+  stop_session "$name"
+  reg_write "$name" state "down" lastPutDown "$(now_iso)"
+  echo "\"$name\" is down. Session retained — \`topic up \"$name\"\` resumes it."
+}
+
+cmd_handoff_path() {
+  local name="${1:?usage: topic handoff-path \"<name>\"}"
+  local d; d="$(topic_dir "$name")/handoffs"
+  mkdir -p "$d"
+  printf '%s/%s.md\n' "$d" "$(date +%Y%m%d-%H%M%S)"
+}
+
+cmd_handoff_swap() {
+  local name="" doc="" focus=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --focus) focus="$2"; shift 2 ;;
+      *) if [[ -z "$name" ]]; then name="$1"; else doc="$1"; fi; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || die "usage: topic handoff-swap \"<name>\" [handoff-doc] [--focus \"<what to pick up>\"]"
+
+  if [[ -z "$doc" ]]; then
+    doc="$(ls -1t "$(topic_dir "$name")/handoffs"/*.md 2>/dev/null | head -1 || true)"
+  fi
+  [[ -n "$doc" && -f "$doc" ]] || die "no handoff doc found for \"$name\" — write one first (topic handoff-path \"$name\")"
+  [[ -s "$doc" ]] || die "handoff doc $doc is empty — refusing to swap"
+
+  local old_sid dir gen
+  old_sid="$(reg_read "$name" sessionId)"
+  dir="$(reg_read "$name" dir)"; [[ -n "$dir" ]] || dir="$PWD"
+  gen="$(reg_read "$name" generation)"; [[ -n "$gen" ]] || gen=1
+
+  echo "Handing off \"$name\" (generation $gen -> $((gen+1)))"
+  echo "  handoff doc: $doc"
+
+  # Retire the old session first so the topic stays a singleton.
+  stop_session "$name"
+  [[ -n "$old_sid" ]] && reg_push_history "$name" "$old_sid" "$doc"
+
+  local new_sid; new_sid="$(new_uuid)"
+  local seed="You are resuming the topic \"$name\" in a fresh session. Read the handoff document at $doc — it was written by your previous session on this topic and contains the salient context. Summarise briefly what you picked up, then continue from there."
+  if [[ -n "$focus" ]]; then
+    seed+=" The handoff is focused on: ${focus}. Start there. The doc also lists other open threads that were deliberately set aside — do not act on those unless asked, but do not treat them as finished either."
+  fi
+
+  launch_session "$name" "$dir" --remote-control "$name" --name "$name" --session-id "$new_sid" "$seed"
+
+  reg_write "$name" name "$name" dir "$dir" sessionId "$new_sid" \
+            state "up" generation "$((gen+1))" lastPickedUp "$(now_iso)" \
+            lastHandoff "$doc"
+  echo "\"$name\" is up on a fresh session (${new_sid:0:8}…). Old session archived in history."
+}
+
+# Adopt an already-running session that topic did not launch.
+#
+# We need the session's UUID so a later `topic up` can --resume it, and a running
+# session does not hold its transcript open (lsof finds nothing). So the caller
+# sends the target a unique probe token via SendMessage, then names it here: we
+# find which transcript the token landed in. The caller's OWN transcript also
+# contains the token (it sent it), hence --exclude.
+#
+#   topic adopt "<name>" --probe <token> [--dir <dir>] [--exclude <uuid>]
+cmd_adopt() {
+  local name="${1:?usage: topic adopt \"<name>\" --probe <token> [--dir <dir>] [--exclude <uuid>]}"; shift
+  local probe="" dir="" exclude=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --probe)      probe="$2"; shift 2 ;;
+      --dir)        dir="$2"; shift 2 ;;
+      --exclude)    exclude="$2"; shift 2 ;;
+      --session-id) known_uuid="$2"; shift 2 ;;
+      *) die "adopt: unexpected argument: $1" ;;
+    esac
+  done
+
+  # A session that already knows its own UUID (e.g. adopting itself) can skip the
+  # probe entirely.
+  if [[ -n "${known_uuid:-}" ]]; then
+    local kdir="${dir:-$PWD}"
+    reg_write "$name" name "$name" dir "$kdir" sessionId "$known_uuid" \
+              generation "1" state "adopted" adoptedAt "$(now_iso)"
+    echo "Adopted \"$name\" -> session ${known_uuid:0:8}… (dir: $kdir)"
+    echo "  Running OUTSIDE topic management. Exit it, then:"
+    echo "    topic up \"$name\" --claim"
+    return 0
+  fi
+
+  [[ -n "$probe" ]] || die "adopt: --probe <token> or --session-id <uuid> is required"
+
+  local projects="$HOME/.claude/projects"
+  local hits=() f uuid
+  while IFS= read -r f; do
+    uuid="$(basename "$f" .jsonl)"
+    [[ -n "$exclude" && "$uuid" == "$exclude" ]] && continue
+    hits+=("$f")
+  done < <(grep -rl -- "$probe" "$projects" 2>/dev/null | grep '\.jsonl$' || true)
+
+  case "${#hits[@]}" in
+    0) die "adopt: probe token \"$probe\" not found in any transcript — did the target session receive it?" ;;
+    1) : ;;
+    *) echo "adopt: probe matched ${#hits[@]} transcripts — cannot disambiguate:" >&2
+       printf '  %s\n' "${hits[@]}" >&2
+       die "re-run with --exclude <your-own-session-uuid>" ;;
+  esac
+
+  uuid="$(basename "${hits[0]}" .jsonl)"
+
+  # Derive the working directory from the transcript's project slug if not given.
+  if [[ -z "$dir" ]]; then
+    local slug; slug="$(basename "$(dirname "${hits[0]}")")"
+    dir="$(printf '%s' "$slug" | sed 's|^-|/|; s|-|/|g')"
+    [[ -d "$dir" ]] || dir="$HOME"
+  fi
+
+  reg_write "$name" name "$name" dir "$dir" sessionId "$uuid" \
+            generation "1" state "adopted" adoptedAt "$(now_iso)"
+  echo "Adopted \"$name\" -> session ${uuid:0:8}… (dir: $dir)"
+  echo "  It is still running OUTSIDE topic management (no tmux, no --name)."
+  echo "  \`topic down \"$name\"\` then \`topic up \"$name\"\` brings it fully under management."
+}
+
+cmd_status() {
+  local name="${1:?usage: topic status \"<name>\"}"
+  local f; f="$(topic_json "$name")"
+  [[ -f "$f" ]] || die "no such topic: \"$name\""
+  local state; if is_up "$name"; then state="UP"; else state="down"; fi
+  echo "$name  [$state]"
+  python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+for k in ("dir","sessionId","generation","lastPickedUp","lastPutDown","lastHandoff"):
+    if d.get(k): print(f"  {k}: {d[k]}")
+h=d.get("history") or []
+if h: print(f"  retired sessions: {len(h)}")' "$f"
+}
+
+cmd_list() {
+  mkdir -p "$TOPICS_ROOT"
+  local found=0 d name state
+  for d in "$TOPICS_ROOT"/*/; do
+    [[ -f "$d/topic.json" ]] || continue
+    found=1
+    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    [[ -n "$name" ]] || continue
+    # An adopted topic is running outside tmux, so is_up() cannot see it.
+    # Report that honestly rather than calling a live session "down".
+    if is_up "$name"; then
+      state="UP    "
+    elif [[ "$(reg_read "$name" state)" == "adopted" ]]; then
+      state="ADOPTED"
+    else
+      state="down  "
+    fi
+    printf '  %-7s %s\n' "$state" "$name"
+  done
+  [[ $found -eq 1 ]] || echo "  (no topics yet — \`topic up \"<name>\" [dir]\` creates one)"
+}
+
+cmd_ensure_dispatcher() {
+  if is_up "$DISPATCHER_NAME"; then
+    echo "\"$DISPATCHER_NAME\" is up."
+    return 0
+  fi
+  local dir; dir="$(reg_read "$DISPATCHER_NAME" dir)"; [[ -n "$dir" ]] || dir="$HOME"
+  echo "\"$DISPATCHER_NAME\" is down — starting it."
+  cmd_up "$DISPATCHER_NAME" "$dir"
+}
+
+usage() {
+  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+  up)                shift; cmd_up "$@" ;;
+  adopt)             shift; cmd_adopt "$@" ;;
+  down)              shift; cmd_down "$@" ;;
+  list|ls)           shift; cmd_list "$@" ;;
+  status)            shift; cmd_status "$@" ;;
+  handoff-path)      shift; cmd_handoff_path "$@" ;;
+  handoff-swap)      shift; cmd_handoff_swap "$@" ;;
+  ensure-dispatcher) shift; cmd_ensure_dispatcher "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) die "unknown command: $1 (try: topic --help)" ;;
+esac

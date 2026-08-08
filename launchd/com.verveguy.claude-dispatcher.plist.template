@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.verveguy.claude-dispatcher</string>
+
+  <!--
+    Keeps the "Dispatcher" Claude topic alive.
+
+    `topic ensure-dispatcher` is idempotent: it is a no-op when the Dispatcher
+    tmux session already exists, and starts it when it does not. We supervise it
+    that way rather than with KeepAlive because the real process lives inside a
+    detached tmux session, which launchd cannot watch directly.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/topic</string>
+    <string>ensure-dispatcher</string>
+  </array>
+
+  <!-- Start it at login... -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- ...and re-check every 5 minutes so it comes back if it dies. -->
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__HOME__</string>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/claude-dispatcher.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/claude-dispatcher.log</string>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>

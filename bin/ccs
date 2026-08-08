@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# ccs — start a Claude Code session in a named tmux session
+# Usage: ccs [-r|--remote] "<session name>" [directory]
+#
+# Creates a DETACHED tmux session running Claude Code, ready to attach later
+# (locally or remotely over SSH).
+#
+# With -r/--remote, the session ALSO starts with Remote Control enabled and
+# registered under "<session name>". The two access paths are independent:
+#   tmux           -> local attach + SSH attach, survives disconnect
+#   Remote Control -> claude.ai (phone/browser), and agent-to-agent messaging
+#                     (another Claude session can find it via ListAgents and
+#                      drive it via SendMessage)
+#
+# Bootstrap-for-travel flow:
+#   1. ccs "trip session" ~/dev/fantasy     # at home, before leaving
+#   2. [travel, get on plane, arrive somewhere]
+#   3. ssh home -t tmux attach -t "trip session"
+#   The session is already past the trust prompt and ready for input.
+set -euo pipefail
+
+remote=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r|--remote) remote=1; shift ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2
+        echo "Usage: ccs [-r|--remote] \"<session name>\" [directory]" >&2
+        exit 2 ;;
+    *) break ;;
+  esac
+done
+
+name="${1:?Usage: ccs [-r|--remote] \"<session name>\" [directory]}"
+target="${2:-$PWD}"
+
+mkdir -p "$target"
+target="$(cd "$target" && pwd)"
+
+# Exact-match check (the = prefix prevents tmux's default prefix matching)
+if tmux has-session -t "=$name" 2>/dev/null; then
+  echo "Session \"$name\" already exists." >&2
+  echo "Attach: tmux attach -t \"$name\"" >&2
+  exit 1
+fi
+
+# Build the claude command. printf %q handles names containing spaces or quotes,
+# since this string is replayed through a shell by tmux send-keys.
+if [[ $remote -eq 1 ]]; then
+  claude_cmd="$(printf 'claude --remote-control %q' "$name")"
+else
+  claude_cmd="claude"
+fi
+
+# Create detached session in target dir, then send the claude command.
+# send-keys (rather than `tmux new -d ... claude`) means when claude exits
+# you're left at a shell instead of the tmux session dying.
+tmux new-session -d -s "$name" -c "$target"
+tmux send-keys -t "$name" "$claude_cmd" Enter
+
+# Auto-accept the workspace trust prompt if it appears.
+# Poll the pane up to 15s; if the prompt appears, send Enter to confirm
+# (default-highlighted option is "Yes, I trust this folder").
+# If the folder is already trusted, no prompt appears — falls through quietly.
+printf "Waiting for Claude to start"
+for i in $(seq 1 30); do
+  pane="$(tmux capture-pane -t "$name" -p 2>/dev/null || true)"
+  if printf '%s' "$pane" | grep -q "trust this folder"; then
+    sleep 0.3  # small settle delay so we don't race the prompt render
+    tmux send-keys -t "$name" Enter
+    printf " — trust accepted.\n"
+    break
+  fi
+  # Heuristic for "already trusted, Claude is ready": the welcome banner
+  # ("Welcome back <name>!") renders immediately after the startup splash
+  # and only appears past the trust prompt. Remote Control sessions print
+  # "/remote-control is active ..." instead of the banner, so match either.
+  if printf '%s' "$pane" | grep -qiE "Welcome back|remote-control is active"; then
+    printf " — already trusted.\n"
+    break
+  fi
+  sleep 0.5
+  printf "."
+done
+echo
+
+echo "Started tmux session \"$name\" in $target"
+if [[ $remote -eq 1 ]]; then
+  echo "Remote Control: enabled as \"$name\" (visible on claude.ai and to other sessions)"
+fi
+echo
+echo "Attach locally:  tmux attach -t \"$name\""
+echo "Attach remotely: ssh <host> -t tmux attach -t \"$name\""
+echo "List sessions:   tmux ls"
+echo "Kill session:    tmux kill-session -t \"$name\""
