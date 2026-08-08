@@ -12,6 +12,12 @@
 #   topic status "<name>"       Detail for one topic.
 #   topic forget "<name>"       Stop tracking a topic (keeps handoff docs; --purge
 #                               removes them). The session itself is untouched.
+#   topic prune                 Show topics that are truly dead — down, with no
+#                               transcript left to resume. --yes removes them.
+#   topic adopt "<name>"        Track a session topic did not launch, by reading
+#                               ~/.claude/sessions/<pid>.json. --pid / --dir
+#                               disambiguate; --probe <token> handles a session
+#                               with no live record.
 #
 #   topic handoff-path "<name>" Print where the handoff doc must be written.
 #   topic handoff-swap "<name>" Retire the old session, start a fresh one seeded
@@ -203,9 +209,31 @@ cmd_up() {
 
   # An adopted topic still has its ORIGINAL process running outside tmux. Starting
   # here would --resume the same session UUID in a second process: two writers on
-  # one transcript, which corrupts it. We cannot detect that process reliably (the
-  # transcript is not held open, and an idle session does not write), so refuse by
-  # default and make the caller assert the original is gone.
+  # one transcript, which corrupts it.
+  #
+  # When adoption went through ~/.claude/sessions we know the original pid, so the
+  # hazard IS detectable — and --claim must not be allowed to override a process we
+  # can still see. Match on sessionId too, in case the pid has been recycled.
+  local adopted_pid=""
+  if [[ "$(reg_read "$name" state)" == "adopted" ]]; then
+    adopted_pid="$(reg_read "$name" adoptedPid)"
+    if [[ -n "$adopted_pid" ]]; then
+      local asid live
+      asid="$(reg_read "$name" sessionId)"
+      live="$(live_sessions || true)"
+      if [[ "$live" == *"$adopted_pid	$asid	"* ]]; then
+        echo "\"$name\" is still running as pid $adopted_pid, outside tmux." >&2
+        echo "  Resuming session ${asid:0:8}… in a second process would corrupt its" >&2
+        echo "  transcript. Exit that session (/exit in its window), then re-run." >&2
+        die "refusing to start while the original process is alive"
+      fi
+      # Positively verified gone — no need to make the caller assert it.
+      claim=1
+    fi
+  fi
+
+  # No pid on record (probe-adopted, or an older registry entry): we cannot see the
+  # original process, so make the caller assert it is gone.
   if [[ "$(reg_read "$name" state)" == "adopted" && $claim -eq 0 ]]; then
     echo "\"$name\" was adopted but not yet claimed." >&2
     echo "" >&2
@@ -328,11 +356,12 @@ cmd_handoff_swap() {
 # surviving record of what a topic was about, and "stop tracking this" should not
 # mean "destroy the history". --purge removes them too.
 cmd_forget() {
-  local name="" purge=0
+  local name="" purge=0 dead=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --purge) purge=1; shift ;;
-      *) name="$1"; shift ;;
+      --dead)  dead=1; shift ;;   # internal: set by `prune`, suppresses the
+      *) name="$1"; shift ;;      # "still resumable" line for a dead session
     esac
   done
   [[ -n "$name" ]] || die "usage: topic forget \"<name>\" [--purge]"
@@ -345,7 +374,12 @@ cmd_forget() {
 
   local sid n
   sid="$(reg_read "$name" sessionId)"
-  n="$(ls -1 "$d/handoffs"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+  # An absent handoffs dir makes the lister exit non-zero, and `pipefail` + `set -e`
+  # would turn that into a silent abort BEFORE anything is deleted — `topic forget`
+  # did exactly that for every topic with no handoff docs. The trailing `|| true`
+  # is what actually fixes it; the count still comes through.
+  n="$(find "$d/handoffs" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
+  [[ -n "$n" ]] || n=0
 
   if [[ $purge -eq 1 ]]; then
     rm -rf "$d"
@@ -356,27 +390,112 @@ cmd_forget() {
     echo "Forgot \"$name\"."
     [[ "$n" -gt 0 ]] && echo "  Kept $n handoff doc(s) in $d/handoffs/ (--purge to remove)."
   fi
-  # The session itself is untouched and still resumable directly.
-  [[ -n "$sid" ]] && echo "  Session $sid is untouched: claude --resume $sid"
+  # The session itself is untouched and still resumable directly — unless `prune`
+  # already established that its transcript is gone.
+  [[ -n "$sid" && $dead -eq 0 ]] && echo "  Session $sid is untouched: claude --resume $sid"
   return 0
+}
+
+# Path to a session's transcript, or "" if it no longer exists. A topic whose
+# transcript is gone cannot be --resume'd: it is dead, not merely put down.
+transcript_of() {
+  local uuid="$1"
+  [[ -n "$uuid" ]] || { printf ''; return 0; }
+  find "$HOME/.claude/projects" -name "$uuid.jsonl" -print -quit 2>/dev/null || printf ''
+}
+
+# Remove topics that are truly dead — down, and with no transcript left to resume.
+# Dry-run by default: nothing is deleted until --yes.
+#
+#   topic prune [--yes] [--purge]
+cmd_prune() {
+  local yes=0 purge=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --yes|-y) yes=1; shift ;;
+      --purge)  purge=1; shift ;;
+      *) die "prune: unexpected argument: $1" ;;
+    esac
+  done
+
+  mkdir -p "$TOPICS_ROOT"
+  local dead=() d name sid
+  for d in "$TOPICS_ROOT"/*/; do
+    [[ -f "$d/topic.json" ]] || continue
+    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    [[ -n "$name" ]] || continue
+    is_up "$name" && continue
+    sid="$(reg_read "$name" sessionId)"
+    # No sessionId at all also counts as dead: nothing to resume.
+    [[ -z "$sid" || -z "$(transcript_of "$sid")" ]] && dead+=("$name")
+  done
+
+  if [[ ${#dead[@]} -eq 0 ]]; then
+    echo "Nothing to prune — every down topic still has a resumable transcript."
+    return 0
+  fi
+
+  echo "Dead topics (down, transcript gone — not resumable):"
+  for name in "${dead[@]}"; do
+    sid="$(reg_read "$name" sessionId)"
+    printf '  %-30s %s\n' "$name" "${sid:-<no session>}"
+  done
+
+  if [[ $yes -eq 0 ]]; then
+    echo ""
+    local extra=""; [[ $purge -eq 1 ]] && extra=" --purge"
+    echo "Dry run. To remove: topic prune --yes$extra"
+    echo "  (handoff docs are kept unless --purge)"
+    return 0
+  fi
+
+  echo ""
+  for name in "${dead[@]}"; do
+    if [[ $purge -eq 1 ]]; then cmd_forget "$name" --dead --purge; else cmd_forget "$name" --dead; fi
+  done
+}
+
+# Every LIVE session writes ~/.claude/sessions/<pid>.json holding the authoritative
+# name -> sessionId -> cwd mapping. Records are NOT removed when a session exits,
+# so liveness must be re-checked against the pid.
+#
+# Emits one TSV line per live session: pid \t sessionId \t cwd \t name
+live_sessions() {
+  python3 -c '
+import glob, json, os, sys
+for f in sorted(glob.glob(os.path.expanduser("~/.claude/sessions/*.json"))):
+    try: d = json.load(open(f))
+    except Exception: continue
+    pid, sid = d.get("pid"), d.get("sessionId")
+    if not pid or not sid: continue
+    try: os.kill(int(pid), 0)          # stale record from an exited session
+    except OSError: continue
+    print("\t".join(str(x) for x in (pid, sid, d.get("cwd",""), d.get("name",""))))'
 }
 
 # Adopt an already-running session that topic did not launch.
 #
-# We need the session's UUID so a later `topic up` can --resume it, and a running
-# session does not hold its transcript open (lsof finds nothing). So the caller
-# sends the target a unique probe token via SendMessage, then names it here: we
-# find which transcript the token landed in. The caller's OWN transcript also
-# contains the token (it sent it), hence --exclude.
+# Preferred path: read ~/.claude/sessions/<pid>.json, which already knows the
+# session UUID — no probe, no round trip. `topic adopt "<name>"` narrows the live
+# sessions by --pid, then --dir, then by a name equal to the topic name, and
+# adopts if exactly one candidate survives.
 #
+# Fallback path (--probe): for a session with no live record — it exited, or its
+# record is unreadable. A running session does not hold its transcript open, so
+# instead the caller sends the target a unique token via SendMessage and names it
+# here; we find which transcript the token landed in. The caller's OWN transcript
+# also contains the token (it sent it), hence --exclude.
+#
+#   topic adopt "<name>" [--pid <pid>] [--dir <dir>] [--exclude <uuid>]
 #   topic adopt "<name>" --probe <token> [--dir <dir>] [--exclude <uuid>]
 cmd_adopt() {
-  local name="${1:?usage: topic adopt \"<name>\" --probe <token> [--dir <dir>] [--exclude <uuid>]}"; shift
-  local probe="" dir="" exclude=""
+  local name="${1:?usage: topic adopt \"<name>\" [--pid <pid>] [--dir <dir>] | --probe <token>}"; shift
+  local probe="" dir="" exclude="" pid=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --probe)      probe="$2"; shift 2 ;;
       --dir)        dir="$2"; shift 2 ;;
+      --pid)        pid="$2"; shift 2 ;;
       --exclude)    exclude="$2"; shift 2 ;;
       --session-id) known_uuid="$2"; shift 2 ;;
       *) die "adopt: unexpected argument: $1" ;;
@@ -395,7 +514,65 @@ cmd_adopt() {
     return 0
   fi
 
-  [[ -n "$probe" ]] || die "adopt: --probe <token> or --session-id <uuid> is required"
+  # ---- preferred path: the live session already published its own UUID --------
+  if [[ -z "$probe" ]]; then
+    local all=() rows=() row
+    while IFS= read -r row; do
+      [[ -n "$exclude" && "$row" == *"	$exclude	"* ]] && continue
+      all+=("$row")
+    done < <(live_sessions)
+
+    [[ ${#all[@]} -gt 0 ]] ||
+      die "adopt: no live sessions found in ~/.claude/sessions — if the target has exited, use --probe"
+
+    # Narrow progressively; keep the last filter that left at least one candidate.
+    rows=("${all[@]}")
+    local filtered=()
+    _narrow() {  # _narrow <awk-field> <value>
+      filtered=()
+      for row in "${rows[@]}"; do
+        [[ "$(printf '%s' "$row" | cut -f"$1")" == "$2" ]] && filtered+=("$row")
+      done
+      # A filter that matches nothing is ignored, not fatal — keep the wider set
+      # and let the caller disambiguate. Must return 0 or `set -e` kills us.
+      [[ ${#filtered[@]} -gt 0 ]] && rows=("${filtered[@]}")
+      return 0
+    }
+    # --pid is an explicit assertion: if it matches no live session, say so rather
+    # than quietly adopting something else.
+    if [[ -n "$pid" ]]; then
+      _narrow 1 "$pid"
+      [[ "$(printf '%s' "${rows[0]}" | cut -f1)" == "$pid" ]] ||
+        die "adopt: no live session with pid $pid (see ~/.claude/sessions)"
+    fi
+    [[ -n "$dir" ]] && _narrow 3 "$dir"
+    _narrow 4 "$name"
+
+    if [[ ${#rows[@]} -ne 1 ]]; then
+      echo "adopt: ${#rows[@]} live sessions match — disambiguate with --pid (or --dir):" >&2
+      for row in "${rows[@]}"; do
+        printf '  --pid %-7s %-40s %s\n' \
+          "$(printf '%s' "$row" | cut -f1)" \
+          "$(printf '%s' "$row" | cut -f4)" \
+          "$(printf '%s' "$row" | cut -f3)" >&2
+      done
+      die "expected exactly one match"
+    fi
+
+    local uuid; uuid="$(printf '%s' "${rows[0]}" | cut -f2)"
+    local spid; spid="$(printf '%s' "${rows[0]}" | cut -f1)"
+    local sdir; sdir="$(printf '%s' "${rows[0]}" | cut -f3)"
+    local sname; sname="$(printf '%s' "${rows[0]}" | cut -f4)"
+    [[ -n "$dir" ]] || dir="${sdir:-$HOME}"
+
+    reg_write "$name" name "$name" dir "$dir" sessionId "$uuid" \
+              generation "1" state "adopted" adoptedAt "$(now_iso)" adoptedPid "$spid"
+    echo "Adopted \"$name\" -> session ${uuid:0:8}… (pid $spid, advertised as \"${sname:-?}\", dir: $dir)"
+    echo "  Still running OUTSIDE topic management as pid $spid."
+    echo "  Exit that session, then: topic up \"$name\""
+    echo "  (no --claim needed — the pid is on record, so topic checks it for you)"
+    return 0
+  fi
 
   local projects="$HOME/.claude/projects"
   local hits=() f uuid
@@ -484,6 +661,7 @@ case "${1:-}" in
   up)                shift; cmd_up "$@" ;;
   adopt)             shift; cmd_adopt "$@" ;;
   forget)            shift; cmd_forget "$@" ;;
+  prune)             shift; cmd_prune "$@" ;;
   down)              shift; cmd_down "$@" ;;
   list|ls)           shift; cmd_list "$@" ;;
   status)            shift; cmd_status "$@" ;;

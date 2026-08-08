@@ -55,10 +55,22 @@ When the user asks you — as the Dispatcher — to act on another topic, just r
 ## Adopting an existing session
 
 A session started outside topic management (a plain `claude` invocation) can be
-brought under management, but it is a **two-step** process with a real hazard.
+brought under management. It is a **two-step** process with a real hazard.
 
-To adopt, we need the session's UUID. A running session does not hold its transcript
-open, so we identify it by probe:
+**Step 1 — register it.** Every live session publishes its own
+`~/.claude/sessions/<pid>.json` with the authoritative name → UUID → cwd mapping, so
+no probe is needed. Just name the topic:
+
+```bash
+topic adopt "<name>"                 # a live session already named <name>
+topic adopt "<name>" --pid <pid>     # or point straight at one
+topic adopt "<name>" --dir <dir>     # or narrow by working directory
+```
+
+If that leaves more than one candidate, the command lists the live sessions with the
+`--pid` to use — it never guesses. Prefer this path; it needs no round trip.
+
+Use `--probe` only when the target has **no live record** (it has exited):
 
 1. `ListAgents`, then `SendMessage` the target a unique token, e.g.
    `ADOPT-PROBE-<random>`, asking it to simply acknowledge and change nothing.
@@ -67,23 +79,34 @@ open, so we identify it by probe:
    ```bash
    topic adopt "<name>" --probe <token> --exclude <your-own-session-uuid>
    ```
-   If you do not know your own session UUID, run without `--exclude`; the command
-   lists the ambiguous matches rather than guessing.
 
-`adopt` is non-destructive — it only records the UUID and directory.
+A session adopting *itself* already knows its UUID: `topic adopt "<name>"
+--session-id <uuid>`.
 
-**The hazard.** The adopted session is still running outside tmux. Starting it under
-topic management would resume the same session UUID in a *second* process — two
-writers on one transcript, which corrupts it. So `topic up` refuses on an adopted
-topic until you assert the original is gone:
+`adopt` is non-destructive — it only records the UUID, directory, and pid.
+
+**Step 2 — claim it.** The adopted session is still running outside tmux. Starting it
+under topic management would resume the same session UUID in a *second* process — two
+writers on one transcript, which corrupts it. The user must exit the original first.
 
 ```bash
-# 1. user exits the original session (/exit in its window)
-# 2. then, and only then:
-topic up "<name>" --claim
+topic up "<name>"           # adopted via a live record — pid on file, checked for you
+topic up "<name>" --claim   # adopted via --probe / --session-id — you are asserting it exited
 ```
 
-Never pass `--claim` unless the user has confirmed the original session has exited.
+Adoption through a live record stores the pid, so `topic up` refuses on its own while
+that process is alive and needs no assertion once it is gone. The other paths have no
+pid to check: **never pass `--claim` unless the user has confirmed the original
+session has exited.**
+
+## Removing topics
+
+- `topic forget "<name>"` — stop tracking a topic you are done with. Refuses while it
+  is up; keeps handoff docs unless `--purge`; the session stays resumable.
+- `topic prune` — find topics that are *dead*: down, with no transcript left, so they
+  could never be resumed. Dry run by default; `topic prune --yes` removes them
+  (add `--purge` to drop their handoff docs too). Always show the user the dry run
+  before running `--yes`.
 
 ## Notes
 

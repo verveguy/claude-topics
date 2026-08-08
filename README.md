@@ -46,6 +46,7 @@ topic down   "<name>"         # put down: terminate, but stay resumable
 topic list                    # what's up, what's down
 topic status "<name>"         # dir, session UUID, generation, retired sessions
 topic forget "<name>"         # stop tracking it (keeps handoff docs)
+topic prune                   # show topics that are dead; --yes removes them
 
 topic up "<name>" [dir] --seed-from <file>    # start a NEW topic from a brief
 ```
@@ -56,10 +57,22 @@ to the existing topic, and start a second topic from its own brief, each in its 
 working directory. Ignored (with a warning) if the topic already has a session to
 resume.
 
-`forget` is the disposal path. It refuses while the topic is up, keeps the handoff
-documents unless you pass `--purge` (they are often the only surviving record of what
-a topic was about), and never touches the session itself — it stays resumable with
-`claude --resume <uuid>`.
+`forget` is the disposal path for one topic you have decided you are done with. It
+refuses while the topic is up, keeps the handoff documents unless you pass `--purge`
+(they are often the only surviving record of what a topic was about), and never
+touches the session itself — it stays resumable with `claude --resume <uuid>`.
+
+`prune` is the disposal path for topics that are dead whether you decided so or not:
+down, with no transcript left in `~/.claude/projects`, so `up` could never resume
+them. It is a **dry run by default** — it prints what it would remove and stops.
+`--yes` carries it out (via `forget`, so handoff docs survive unless you add
+`--purge`). Live and merely-put-down topics are never touched.
+
+```bash
+topic prune                   # what is dead?
+topic prune --yes             # remove them, keep their handoff docs
+topic prune --yes --purge     # remove them and their handoff docs
+```
 
 ```bash
 ssh home -t tmux attach -t "<name>"       # attach to any topic over SSH
@@ -122,26 +135,48 @@ From your phone, you talk to the Dispatcher: *"pick up Fantasy Economics"*,
 
 ### Adopting an existing session
 
-A session started outside `topic` can be brought under management — but it's a
-**two-step with a real hazard**.
+A session started outside `topic` can be brought under management. Every live
+session publishes `~/.claude/sessions/<pid>.json` — the authoritative
+`name` → `sessionId` → `cwd` mapping — so adoption normally needs no probe and no
+round trip:
 
 ```bash
-# 1. identify it (running sessions record their name + UUID on disk)
-topic adopt "<name>" --session-id <uuid>
-#    or, if the UUID is unknown: send it a unique token, then
-topic adopt "<name>" --probe <token> --exclude <your-own-session-uuid>
-
-# 2. the original must EXIT first, then:
-topic up "<name>" --claim
+topic adopt "<name>"                 # matches a live session whose name is <name>
+topic adopt "<name>" --pid 61222     # or point straight at one
+topic adopt "<name>" --dir ~/dev/x   # or narrow by working directory
 ```
 
-`adopt` is non-destructive — it only records the UUID and directory.
+Candidates are narrowed by `--pid`, then `--dir`, then by a name equal to the topic
+name; if that doesn't leave exactly one, `topic` lists the live sessions with the
+`--pid` needed to disambiguate. Records linger after a session exits, so liveness is
+re-checked against the pid.
 
-**Why `--claim` exists:** the adopted session is still running outside tmux.
-Starting it under `topic` would resume the same session UUID in a *second* process —
-two writers on one transcript, which corrupts it. Liveness can't be detected
-reliably (the transcript isn't held open, and an idle session doesn't write), so
-`topic up` refuses until you assert the original is gone.
+Two fallbacks remain. `--session-id <uuid>` when the UUID is already known (a session
+adopting *itself*), and `--probe` when the target has **no live record** — it exited,
+or its record is unreadable. A running session doesn't hold its transcript open, so
+the probe path instead sends it a unique token and finds which transcript that token
+landed in:
+
+```bash
+topic adopt "<name>" --probe <token> --exclude <your-own-session-uuid>
+```
+
+`adopt` is non-destructive — it only records the UUID, directory, and pid.
+
+**Then claim it.** The adopted session is still running outside tmux. Starting it
+under `topic` would resume the same session UUID in a *second* process — two writers
+on one transcript, which corrupts it.
+
+```bash
+topic up "<name>"           # after adoption via a live record
+topic up "<name>" --claim   # after --probe / --session-id adoption
+```
+
+Adoption through a live record stores the pid, so `topic up` can *see* the original:
+it refuses outright while that process is alive (`--claim` will not override it), and
+needs no assertion once it's gone. The probe and `--session-id` paths have no pid to
+check, so they still fail closed until you assert the original has exited with
+`--claim`.
 
 ## Non-obvious mechanics
 
@@ -159,7 +194,13 @@ Learned the hard way; don't re-derive them.
   name to `~/.claude/sessions/<pid>.json`.
 - **`~/.claude/sessions/<pid>.json`** is the authoritative live-session record —
   `name`, `sessionId`, `cwd`, `tmux`. Best starting point for any "which session is
-  this?" question.
+  this?" question, and what `topic adopt` reads. Records are **not** removed when a
+  session exits, so always re-check the pid before trusting one.
+- **`pipefail` + `set -e` turns a missing directory into a silent abort.** `ls`/`find`
+  over an absent path exits non-zero inside a command substitution, and the script
+  dies with no output and nothing done. `topic forget` failed exactly this way for
+  every topic that had no handoff docs — it looked like a no-op. Terminate such
+  pipelines with `|| true`.
 - **Session start-up detection is text-matching.** `topic` polls the pane
   for the trust prompt or a readiness banner (`Welcome back` / `remote-control is
   active`). Claude Code's startup text has changed twice already — suspect this first
