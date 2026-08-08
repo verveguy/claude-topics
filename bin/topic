@@ -6,6 +6,7 @@
 # what makes hand-off possible.
 #
 #   topic up   "<name>" [dir]   Pick up: resume the topic's session, or start one.
+#                               --seed-from <file> starts a NEW topic from a brief.
 #   topic down "<name>"         Put down: terminate the session, stay resumable.
 #   topic list                  Show every topic and whether it is up or down.
 #   topic status "<name>"       Detail for one topic.
@@ -183,14 +184,20 @@ new_uuid() { uuidgen | tr '[:upper:]' '[:lower:]'; }
 # ---------------------------------------------------------------- commands
 
 cmd_up() {
-  local name="" dir="" claim=0
+  local name="" dir="" claim=0 seed_from=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --claim) claim=1; shift ;;
+      --seed-from) seed_from="$2"; shift 2 ;;
       *) if [[ -z "$name" ]]; then name="$1"; else dir="$1"; fi; shift ;;
     esac
   done
-  [[ -n "$name" ]] || die "usage: topic up \"<name>\" [dir] [--claim]"
+  [[ -n "$name" ]] || die "usage: topic up \"<name>\" [dir] [--claim] [--seed-from <file>]"
+  if [[ -n "$seed_from" ]]; then
+    [[ -f "$seed_from" ]] || die "--seed-from: no such file: $seed_from"
+    [[ -s "$seed_from" ]] || die "--seed-from: file is empty: $seed_from"
+    seed_from="$(cd "$(dirname "$seed_from")" && pwd)/$(basename "$seed_from")"
+  fi
 
   lock_acquire "$name"
 
@@ -223,13 +230,24 @@ cmd_up() {
   sid="$(reg_read "$name" sessionId)"
 
   if [[ -n "$sid" ]]; then
+    [[ -n "$seed_from" ]] &&
+      echo "note: --seed-from ignored; \"$name\" has an existing session to resume." >&2
     echo "Picking up \"$name\" (resuming session ${sid:0:8}…) in $dir"
     launch_session "$name" "$dir" --remote-control "$name" --name "$name" --resume "$sid"
   else
     sid="$(new_uuid)"
     echo "Starting \"$name\" (new session ${sid:0:8}…) in $dir"
-    launch_session "$name" "$dir" --remote-control "$name" --name "$name" --session-id "$sid"
-    reg_write "$name" name "$name" generation "1"
+    if [[ -n "$seed_from" ]]; then
+      # Same seeding path handoff-swap uses, but for a brand-new topic: start a
+      # topic from a brief (a handoff doc, an ideas/ note, an issue write-up).
+      local seed="You are starting the topic \"$name\". Read the briefing document at $seed_from — it contains the context you need. Summarise briefly what you picked up, then continue from there."
+      launch_session "$name" "$dir" --remote-control "$name" --name "$name" \
+                     --session-id "$sid" "$seed"
+      reg_write "$name" name "$name" generation "1" seededFrom "$seed_from"
+    else
+      launch_session "$name" "$dir" --remote-control "$name" --name "$name" --session-id "$sid"
+      reg_write "$name" name "$name" generation "1"
+    fi
   fi
 
   reg_write "$name" name "$name" dir "$dir" sessionId "$sid" \

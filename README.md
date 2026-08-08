@@ -46,7 +46,15 @@ topic down   "<name>"         # put down: terminate, but stay resumable
 topic list                    # what's up, what's down
 topic status "<name>"         # dir, session UUID, generation, retired sessions
 topic forget "<name>"         # stop tracking it (keeps handoff docs)
+
+topic up "<name>" [dir] --seed-from <file>    # start a NEW topic from a brief
 ```
+
+`--seed-from` seeds a brand-new topic with a document — a handoff doc, an `ideas/`
+note, an issue write-up. It is what makes a **split** possible: hand one thread off
+to the existing topic, and start a second topic from its own brief, each in its own
+working directory. Ignored (with a warning) if the topic already has a session to
+resume.
 
 `forget` is the disposal path. It refuses while the topic is up, keeps the handoff
 documents unless you pass `--purge` (they are often the only surviving record of what
