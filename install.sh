@@ -85,6 +85,21 @@ sed -e "s|__HOME__|$HOME|g" \
     -e "s|__CONFIG_DIR__|$CLAUDE_DIR|g" \
     -e "s|__LOG__|$LOG_PATH|g" \
   "$REPO/launchd/com.verveguy.claude-dispatcher.plist.template" > "$PLIST_DEST"
+
+# The default profile must run with CLAUDE_CONFIG_DIR *unset*, not set to ~/.claude:
+# the two select different config files and only the unset one has completed
+# onboarding. Setting it lands the Dispatcher on the first-run theme picker.
+if [[ "$CLAUDE_DIR" == "$HOME/.claude" ]]; then
+  python3 -c '
+import plistlib, sys
+f = sys.argv[1]
+d = plistlib.load(open(f, "rb"))
+env = d.get("EnvironmentVariables") or {}
+env.pop("CLAUDE_CONFIG_DIR", None)
+d["EnvironmentVariables"] = env
+plistlib.dump(d, open(f, "wb"))' "$PLIST_DEST"
+  say "default profile: CLAUDE_CONFIG_DIR deliberately left unset in the agent"
+fi
 say "rendered $PLIST_DEST"
 
 launchctl unload "$PLIST_DEST" 2>/dev/null || true

@@ -182,9 +182,12 @@ UUID and `claude --resume` only looks inside its own profile's `projects/`, so a
 registry moved on its own arrives unresumable, and leaving history behind quietly
 breaks the emergency path back to a pre-handoff session.
 
-It refuses to move a topic that is **up** — a live session's process, tmux session
-and open transcript belong to the profile that launched it, so put it down first. It
-also refuses to overwrite an existing topic of the same name in the destination.
+A topic that is **up** is put down, moved, and brought back up on the far side —
+both halves are lossless, so the session continues where it left off, now in the new
+profile (`--stay-down` leaves it down). It refuses to move the topic you are *running
+the command from*, since putting that down kills the command mid-move; run it from
+another session, which is what the Dispatcher is for. It also refuses to overwrite an
+existing topic of the same name in the destination.
 `--copy` leaves the original in place; be aware that resuming both copies afterwards
 forks the transcript. The destination records `movedFrom`/`movedAt`, since after a
 move the old profile has no trace of where the topic went.
@@ -204,6 +207,12 @@ Three things make profile separation safe rather than merely possible:
 - **The launchd agent is per-profile** — its own label, log, and a baked-in
   `CLAUDE_CONFIG_DIR`. launchd starts with a bare environment, so without that the
   Dispatcher would manage the default profile whichever profile installed it.
+- **The default profile runs with `CLAUDE_CONFIG_DIR` unset, never set to
+  `~/.claude`.** They are not equivalent: unset reads `~/.claude.json`, set reads
+  `~/.claude/.claude.json` — a different file that has never completed onboarding, so
+  the session comes up at the first-run theme picker and `topic` hangs waiting for a
+  readiness marker that never arrives. `topic`, `topics-cycle` and `install.sh` all
+  special-case this.
 
 `topic list` prints the profile whenever it is not the default, so a short list
 cannot be mistaken for missing topics.
@@ -340,6 +349,15 @@ Learned the hard way; don't re-derive them.
   `name`, `sessionId`, `cwd`, `tmux`. Best starting point for any "which session is
   this?" question, and what `topic adopt` reads. Records are **not** removed when a
   session exits, so always re-check the pid before trusting one.
+- **`CLAUDE_CONFIG_DIR=~/.claude` is not the same as leaving it unset.** Unset reads
+  `~/.claude.json` (the long-established config); setting it to the default directory
+  reads `~/.claude/.claude.json` instead, which on an existing install is a stub with
+  no `hasCompletedOnboarding`. The session then opens on the first-run theme picker.
+  Treat "default profile" as "variable absent", not "variable set to the default".
+- **An exiting session keeps writing briefly.** `topic down` returns once claude has
+  left the pane, but the process can still flush a final `file-history-snapshot`
+  record afterwards — which recreates the transcript at its old path after a move.
+  Wait for the file to stop changing before relocating it.
 - **A session's name survives its process, inside its own transcript.** Transcripts
   carry `{"type":"custom-title","customTitle":"..."}` records — that is the name
   `claude --resume` lists. A **rename appends another one**, so the *last* record is

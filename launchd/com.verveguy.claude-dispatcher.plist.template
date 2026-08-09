@@ -35,7 +35,10 @@
     <string>__HOME__</string>
     <!-- Pin the Claude Code profile: launchd starts with a bare environment, so
          without this the Dispatcher would manage the default profile no matter
-         which one it was installed for. -->
+         which one it was installed for. install.sh REMOVES this key for the
+         default profile: CLAUDE_CONFIG_DIR=~/.claude is NOT the same as leaving
+         it unset (it selects ~/.claude/.claude.json rather than ~/.claude.json,
+         which has never completed onboarding). -->
     <key>CLAUDE_CONFIG_DIR</key>
     <string>__CONFIG_DIR__</string>
   </dict>

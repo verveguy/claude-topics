@@ -35,6 +35,14 @@ for a in "$@"; do
   esac
 done
 
+# CLAUDE_CONFIG_DIR=~/.claude is NOT the same as unset — it selects a different,
+# un-onboarded config file. Run the default profile with the variable removed.
+in_profile() {  # in_profile <config-dir> <command...>
+  local dir="$1"; shift
+  if [[ "$dir" == "$HOME/.claude" ]]; then env -u CLAUDE_CONFIG_DIR "$@"
+  else CLAUDE_CONFIG_DIR="$dir" "$@"; fi
+}
+
 run() {  # run <description> <command...>
   if [[ $DRY -eq 1 ]]; then echo "  would: $*"; else "$@"; fi
 }
@@ -78,9 +86,9 @@ case "$CMD" in
     while IFS=$'\t' read -r plist dir; do
       echo "  -- profile: $dir"
       if [[ $DRY -eq 1 ]]; then
-        CLAUDE_CONFIG_DIR="$dir" topic down-all --dry-run | sed 's/^/  /'
+        in_profile "$dir" topic down-all --dry-run | sed 's/^/  /'
       else
-        CLAUDE_CONFIG_DIR="$dir" topic down-all | sed 's/^/  /'
+        in_profile "$dir" topic down-all | sed 's/^/  /'
       fi
     done < <(profiles)
 
@@ -103,7 +111,7 @@ case "$CMD" in
       if [[ $DRY -eq 1 ]]; then
         echo "    would: CLAUDE_CONFIG_DIR=$dir topic ensure-dispatcher"
       else
-        CLAUDE_CONFIG_DIR="$dir" topic ensure-dispatcher | sed 's/^/    /'
+        in_profile "$dir" topic ensure-dispatcher | sed 's/^/    /'
       fi
     done < <(profiles)
 

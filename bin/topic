@@ -36,8 +36,9 @@
 #   topic profiles              Every Claude Code profile, and its topic count.
 #   topic move "<name>" --to <profile>
 #                               Move a topic — registry, docs, and transcripts — into
-#                               another profile. --copy leaves the original, --dry-run
-#                               shows the plan.
+#                               another profile. A live topic is put down and brought
+#                               back up on the far side (--stay-down to leave it down).
+#                               --copy leaves the original, --dry-run shows the plan.
 #
 #   topic ensure-dispatcher     Start the Dispatcher topic if it is not up.
 #                               (Run by launchd at login and every 5 minutes.)
@@ -206,6 +207,25 @@ tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' "$f" "$2"
 
 now_iso() { date +%Y-%m-%dT%H:%M:%S%z; }
 
+# Wait until a file stops changing (size + mtime steady twice in a row), up to ~5s.
+# A Claude session that has just been asked to exit keeps writing for a moment.
+settle() {
+  local f="$1" last="" cur="" stable=0 i
+  [[ -e "$f" ]] || return 0
+  for i in $(seq 1 25); do
+    cur="$(stat -f '%z-%m' "$f" 2>/dev/null || echo gone)"
+    if [[ "$cur" == "$last" ]]; then
+      stable=$((stable + 1))
+      [[ $stable -ge 2 ]] && return 0
+    else
+      stable=0
+    fi
+    last="$cur"
+    sleep 0.2
+  done
+  return 0
+}
+
 # ---------------------------------------------------------------- liveness
 
 is_up() { tmux has-session -t "=$(tmux_name "$1")" 2>/dev/null; }
@@ -241,9 +261,14 @@ launch_session() {
   # reliably inherit our environment — the tmux server may long predate us — and a
   # session launched under the wrong profile writes its transcript somewhere this
   # `topic` cannot see, breaking adopt/prune/resume in confusing ways.
+  #
+  # But ONLY for non-default profiles. CLAUDE_CONFIG_DIR=~/.claude is NOT the same as
+  # leaving it unset: unset reads ~/.claude.json, set reads ~/.claude/.claude.json —
+  # a different file that has never completed onboarding, so the session comes up at
+  # the first-run theme picker and hangs. The default profile must stay unset.
   local cmd="claude"
-  [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] &&
-    cmd="CLAUDE_CONFIG_DIR=$(printf '%q' "$CLAUDE_CONFIG_DIR") claude"
+  [[ -n "$PROFILE_TAG" ]] &&
+    cmd="CLAUDE_CONFIG_DIR=$(printf '%q' "$CLAUDE_DIR") claude"
   local a; for a in "$@"; do cmd+=" $(printf '%q' "$a")"; done
 
   tmux new-session -d -s "$tn" -c "$dir"
@@ -1069,16 +1094,17 @@ cmd_profiles() {
 # `claude --resume` only looks inside its own profile's projects/ directory. Move the
 # registry without the transcript and the topic arrives unresumable.
 cmd_move() {
-  local name="" to="" copy=0 dry=0
+  local name="" to="" copy=0 dry=0 stay_down=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --to)      to="$2"; shift 2 ;;
-      --copy)    copy=1; shift ;;
-      --dry-run) dry=1; shift ;;
+      --to)        to="$2"; shift 2 ;;
+      --copy)      copy=1; shift ;;
+      --dry-run)   dry=1; shift ;;
+      --stay-down) stay_down=1; shift ;;
       *) if [[ -z "$name" ]]; then name="$1"; else die "move: unexpected argument: $1"; fi; shift ;;
     esac
   done
-  [[ -n "$name" ]] || die "usage: topic move \"<name>\" --to <profile> [--copy] [--dry-run]"
+  [[ -n "$name" ]] || die "usage: topic move \"<name>\" --to <profile> [--copy] [--stay-down] [--dry-run]"
   [[ -n "$to" ]]   || die "move: --to <profile> is required (a tag like \"v3rv\", \"default\", or a path)"
 
   local dst; dst="$(resolve_profile "$to")"
@@ -1091,9 +1117,28 @@ cmd_move() {
   [[ -f "$src_dir/topic.json" ]] || die "no such topic in this profile: \"$name\""
 
   # A live session belongs to the profile that launched it — its process, its tmux
-  # session, its open transcript. Moving those out from under it would corrupt the
-  # transcript, so require it to be down first.
-  is_up "$name" && die "\"$name\" is up — \`topic down \"$name\"\` first, then move it"
+  # session, its open transcript — so a live topic is put down first and brought back
+  # up on the far side. Both halves are lossless: the session UUID is stable and `up`
+  # is a real --resume, so the session continues where it left off, in the new profile.
+  local was_up=0
+  if is_up "$name"; then
+    was_up=1
+    # Refusing to move ourselves is not fussiness: `down` terminates the session
+    # running this command, so the move would never happen and the topic would be
+    # left down, half-moved at best.
+    local self; self="$(cmd_whoami 2>/dev/null)" || self=""
+    if [[ -n "$self" && "$self" == "$name" ]]; then
+      echo "\"$name\" is the topic you are running this from." >&2
+      echo "  Putting it down would kill this command mid-move." >&2
+      echo "  Run it from another session — the Dispatcher is there for exactly this:" >&2
+      echo "    topic move \"$name\" --to ${to}" >&2
+      die "refusing to move the calling topic"
+    fi
+    # A copy that is also running would diverge from its original the moment either
+    # side is resumed. Take the copy while it is quiet instead.
+    [[ $copy -eq 1 ]] &&
+      die "move: \"$name\" is up — --copy needs it down first (\`topic down \"$name\"\`)"
+  fi
 
   local dst_dir="$dst/topics/$(slugify "$name")"
   [[ -e "$dst_dir" ]] && die "move: \"$name\" already exists in $dst ($dst_dir)"
@@ -1113,6 +1158,7 @@ print("\n".join(dict.fromkeys(seen)))' "$src_dir/topic.json")
 
   local verb="Moving"; [[ $copy -eq 1 ]] && verb="Copying"
   echo "$verb \"$name\": $CLAUDE_DIR -> $dst"
+  [[ $was_up -eq 1 ]] && echo "  it is UP: will put it down, move, and bring it back up in $dst"
   echo "  registry: $src_dir -> $dst_dir"
 
   # Work out each transcript's destination before touching anything, so a dry run
@@ -1135,6 +1181,18 @@ print("\n".join(dict.fromkeys(seen)))' "$src_dir/topic.json")
     return 0
   fi
 
+  # Put it down BEFORE moving anything: while the session runs it holds its
+  # transcript open and keeps writing to it.
+  if [[ $was_up -eq 1 ]]; then
+    echo ""
+    cmd_down "$name" | sed 's/^/  /'
+    # `down` returns once claude has left the pane, but the process can still flush a
+    # final record on its way out — which lands at the OLD path and recreates a stub
+    # there after the move. Wait for each transcript to stop changing first.
+    for m in "${moves[@]}"; do settle "${m%%|*}"; done
+    echo ""
+  fi
+
   local m from into
   for m in "${moves[@]}"; do
     from="${m%%|*}"; into="${m##*|}"
@@ -1142,6 +1200,22 @@ print("\n".join(dict.fromkeys(seen)))' "$src_dir/topic.json")
     [[ -e "$into" ]] && die "move: $into already exists — refusing to overwrite"
     if [[ $copy -eq 1 ]]; then cp "$from" "$into"; else mv "$from" "$into"; fi
   done
+
+  # Belt and braces: if a late flush still recreated a stub at the source path, drop
+  # it — but only when it is strictly smaller than what we moved, so a real
+  # transcript is never deleted on the strength of a race we merely suspect.
+  if [[ $copy -eq 0 ]]; then
+    for m in "${moves[@]}"; do
+      from="${m%%|*}"; into="${m##*|}"
+      [[ -f "$from" && -f "$into" ]] || continue
+      if [[ "$(stat -f %z "$from")" -lt "$(stat -f %z "$into")" ]]; then
+        rm -f "$from"
+        echo "  (removed a $(basename "$from" .jsonl | cut -c1-8)… stub the exiting session left behind)"
+      else
+        echo "  WARNING: $from reappeared and is not smaller than the moved copy — left in place." >&2
+      fi
+    done
+  fi
 
   mkdir -p "$(dirname "$dst_dir")"
   if [[ $copy -eq 1 ]]; then cp -R "$src_dir" "$dst_dir"; else mv "$src_dir" "$dst_dir"; fi
@@ -1158,6 +1232,28 @@ tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' \
     "$dst_dir/topic.json" "$CLAUDE_DIR" "$(now_iso)"
 
   local tag; tag="$(profile_tag_of "$dst")"
+
+  # Bring it back up on the far side, by re-invoking ourselves against the
+  # destination profile — every path, name and prefix is derived from
+  # CLAUDE_CONFIG_DIR at startup, so this is the only way to get a consistent view
+  # of the profile we just moved into.
+  if [[ $was_up -eq 1 && $stay_down -eq 0 ]]; then
+    echo ""
+    echo "Bringing \"$name\" back up in $dst"
+    local self_path; self_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    # Unset rather than set-to-default for the default profile — see launch_session.
+    if [[ "$dst" == "$HOME/.claude" ]]; then
+      env -u CLAUDE_CONFIG_DIR "$self_path" up "$name" | sed 's/^/  /'
+    else
+      CLAUDE_CONFIG_DIR="$dst" "$self_path" up "$name" | sed 's/^/  /'
+    fi
+    echo ""
+    echo "Moved and running. It is now a ${tag:-default}-profile topic:"
+    echo "  attach:  tmux attach -t \"$(tmux_name_in "$tag" "$name")\""
+    echo "  manage:  CLAUDE_CONFIG_DIR=$dst topic <cmd> \"$name\""
+    return 0
+  fi
+
   echo ""
   echo "Done. Pick it up in its new profile with:"
   if [[ -n "$tag" ]]; then
