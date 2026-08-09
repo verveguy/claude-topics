@@ -195,6 +195,22 @@ If a live move does fail to restart, the move itself has still succeeded — the
 is down, resumable, and reported as such, rather than the failure reading as a lost
 move.
 
+### Renaming
+
+A topic's name lives in five places, and they drift apart easily — `/rename` in the
+Claude UI, for instance, changes only the cloud one, leaving every local command still
+using the old name:
+
+```bash
+topic rename "<old>" "<new>"
+```
+
+It updates the registry directory and `name`, the tmux session, the peer name other
+sessions see in `ListAgents`, the Claude UI name (via a bridge re-mint), and the
+transcript's `custom-title` so `adopt` can still find it later. `forkedFrom`/`forks`
+references in other topics are repointed too, so lineage survives. A live topic is put
+down and brought back up under the new name; `--dry-run` shows the plan.
+
 `move` also **re-registers Remote Control**. A session's RC identity — the name shown
 in the Claude UI *and the account it appears under* — is pinned to a bridge recorded
 inside the transcript, and Claude Code rejoins that bridge on resume, so
@@ -203,7 +219,15 @@ a moved topic keeps advertising its old profile's account under a hostname-deriv
 name (`bretts-mac-studio-lan-…`). `move` drops those records so the next launch mints
 a fresh bridge in the destination profile's account, named after the topic;
 `--keep-bridge` opts out. `topic rebridge "<name>"|--all` does the same to a topic
-that is already in the right place. The transcript is copied to `<topic>/backups/`
+that is already in the right place.
+
+**The cost of a re-mint:** the *cloud* conversation restarts. The local transcript
+keeps everything and the session resumes with its full history, but the Claude UI
+shows the topic from the re-mint onwards, and the previous cloud entry is orphaned —
+still listed, still renameable, no longer connected to anything. That orphan is what
+you are looking at if a session in the UI shows different content from the live one.
+Use `--keep-bridge` when continuous cloud history matters more than a correct name and
+account. The transcript is copied to `<topic>/backups/`
 first, since editing one is unsupported.
 
 `move` takes the whole topic: registry entry, handoff docs, briefs, and **every

@@ -42,6 +42,9 @@
 #                               back up on the far side (--stay-down to leave it down).
 #                               --copy leaves the original, --dry-run shows the plan.
 #
+#   topic rename "<old>" "<new>"
+#                               Rename a topic everywhere: registry, tmux, peer name,
+#                               Claude UI name, and transcript title.
 #   topic rebridge "<name>"|--all [--down-only]
 #                               Drop a session's recorded Remote Control bridge so the
 #                               next launch registers a fresh one — under the current
@@ -1499,8 +1502,17 @@ os.replace(tmp,f)' "$tr"
 #
 # Dropping those records makes the next launch mint a fresh bridge, which picks up
 # --remote-control properly. Verified 2026-08-09: new bridge id, correct name, correct
-# account, conversation intact.
+# account, local conversation intact.
 #
+# COST: the CLOUD conversation restarts. The local transcript keeps everything and the
+# session resumes with its full history, but the Claude UI shows the topic from the
+# re-mint onwards, and the previous cloud entry is orphaned — still listed, still
+# renameable, no longer connected to anything. Use --keep-bridge on `move` when
+# continuous cloud history matters more than a correct name and account.
+#
+#   topic rename "<old>" "<new>"
+#                               Rename a topic everywhere: registry, tmux, peer name,
+#                               Claude UI name, and transcript title.
 #   topic rebridge "<name>"|--all [--down-only] [--dry-run]
 #
 # Editing a transcript is unsupported, so the original is copied to
@@ -1573,6 +1585,110 @@ cmd_rebridge() {
   done
 }
 
+# Rename a topic everywhere it is named. A topic's name appears in five places and
+# they drift apart easily — /rename in the Claude UI, for instance, changes only the
+# cloud one:
+#   1. the registry directory (slugified) and its `name` field
+#   2. the tmux session
+#   3. --name, the peer name other sessions see in ListAgents
+#   4. --remote-control, the name in the Claude UI — pinned to the bridge, so this
+#      requires a re-mint (see rebridge; the cloud conversation restarts)
+#   5. the transcript's custom-title, which is what `adopt` searches by
+#
+#   topic rename "<old>" "<new>" [--dry-run]
+cmd_rename() {
+  local old="" new="" dry=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      *) if [[ -z "$old" ]]; then old="$1"; elif [[ -z "$new" ]]; then new="$1";
+         else die "rename: unexpected argument: $1"; fi; shift ;;
+    esac
+  done
+  [[ -n "$old" && -n "$new" ]] || die "usage: topic rename \"<old>\" \"<new>\" [--dry-run]"
+  [[ "$old" != "$new" ]] || die "rename: the names are identical"
+
+  local old_dir new_dir
+  old_dir="$(topic_dir "$old")"; new_dir="$(topic_dir "$new")"
+  [[ -f "$old_dir/topic.json" ]] || die "no such topic in this profile: \"$old\""
+  [[ "$old_dir" == "$new_dir" || ! -e "$new_dir" ]] ||
+    die "rename: \"$new\" already exists in this profile ($new_dir)"
+
+  local self; self="$(cmd_whoami 2>/dev/null)" || self=""
+  [[ -z "$self" || "$old" != "$self" ]] ||
+    die "rename: \"$old\" is the session running this command — run it from another session"
+
+  # Same reasoning as move: an adopted session runs outside tmux and cannot be stopped
+  # by us, so its transcript must not be edited underneath it.
+  if [[ "$(reg_read "$old" state)" == "adopted" ]]; then
+    local apid asid live
+    apid="$(reg_read "$old" adoptedPid)"; asid="$(reg_read "$old" sessionId)"
+    live="$(live_sessions || true)"
+    [[ -n "$apid" && "$live" == *"$apid	$asid	"* ]] &&
+      die "rename: \"$old\" is adopted and still running as pid $apid — exit it first"
+  fi
+
+  local sid tr was_up=0
+  sid="$(reg_read "$old" sessionId)"
+  tr="$(transcript_of "$sid")"
+  is_up "$old" && was_up=1
+
+  echo "Renaming \"$old\" -> \"$new\""
+  echo "  registry:  $old_dir -> $new_dir"
+  echo "  tmux:      $(tmux_name "$old") -> $(tmux_name "$new")"
+  [[ -n "$tr" ]] && echo "  transcript: re-titled, and its Remote Control bridge re-minted"
+  echo "  NOTE: the Claude UI conversation restarts; the old entry is orphaned there."
+  [[ $was_up -eq 1 ]] && echo "  it is UP: will be put down and brought back up under the new name"
+  if [[ $dry -eq 1 ]]; then echo; echo "Dry run — nothing changed."; return 0; fi
+
+  [[ $was_up -eq 1 ]] && { cmd_down "$old" | sed 's/^/  /'; [[ -n "$tr" ]] && settle "$tr"; }
+
+  if [[ "$old_dir" != "$new_dir" ]]; then mkdir -p "$(dirname "$new_dir")"; mv "$old_dir" "$new_dir"; fi
+  reg_write "$new" name "$new" renamedFrom "$old" renamedAt "$(now_iso)"
+
+  if [[ -n "$tr" ]]; then
+    # Re-mint the bridge so --remote-control re-registers under the new name...
+    drop_bridge_records "$tr" "$new_dir/backups" >/dev/null
+    # ...and re-title the transcript, so `adopt` can find it by the new name later.
+    # A rename appends a record rather than rewriting: last one wins.
+    python3 -c '
+import json,sys
+f,title,sid=sys.argv[1],sys.argv[2],sys.argv[3]
+with open(f,"a") as fh:
+    fh.write(json.dumps({"type":"custom-title","customTitle":title,"sessionId":sid})+"\n")' \
+      "$tr" "$new" "$sid"
+  fi
+
+  # Lineage recorded by `fork` points at names; leave no dangling references.
+  local d n changed
+  for d in "$TOPICS_ROOT"/*/; do
+    [[ -f "$d/topic.json" ]] || continue
+    changed="$(python3 -c '
+import json,os,sys
+f,old,new=sys.argv[1],sys.argv[2],sys.argv[3]
+try: d=json.load(open(f))
+except Exception: sys.exit(0)
+hit=False
+if d.get("forkedFrom")==old: d["forkedFrom"]=new; hit=True
+forks=d.get("forks") or []
+if old in forks:
+    d["forks"]=[new if x==old else x for x in forks]; hit=True
+if hit:
+    tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)
+    print(d.get("name",""))' "$d/topic.json" "$old" "$new")"
+    [[ -n "$changed" ]] && echo "  updated lineage in \"$changed\""
+  done
+
+  if [[ $was_up -eq 1 ]]; then
+    cmd_up "$new" | sed 's/^/  /'
+    echo ""
+    echo "Renamed and running as \"$new\"."
+  else
+    echo ""
+    echo "Renamed. It is down; \`topic up \"$new\"\` starts it under the new name."
+  fi
+}
+
 cmd_ensure_dispatcher() {
   if is_up "$DISPATCHER_NAME"; then
     echo "\"$DISPATCHER_NAME\" is up."
@@ -1597,6 +1713,7 @@ case "${1:-}" in
   profiles)          shift; cmd_profiles "$@" ;;
   move)              shift; cmd_move "$@" ;;
   rebridge)          shift; cmd_rebridge "$@" ;;
+  rename)            shift; cmd_rename "$@" ;;
   prune)             shift; cmd_prune "$@" ;;
   down)              shift; cmd_down "$@" ;;
   list|ls)           shift; cmd_list "$@" ;;
