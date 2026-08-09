@@ -175,6 +175,17 @@ topic move "<name>" --to v3rv         # move a topic into another profile
 topic move "<name>" --to default --dry-run
 ```
 
+`move` also **re-registers Remote Control**. A session's RC identity — the name shown
+in the Claude UI *and the account it appears under* — is pinned to a bridge recorded
+inside the transcript, and Claude Code rejoins that bridge on resume, so
+`--remote-control "<name>"` is silently ignored for an existing session. Without this
+a moved topic keeps advertising its old profile's account under a hostname-derived
+name (`bretts-mac-studio-lan-…`). `move` drops those records so the next launch mints
+a fresh bridge in the destination profile's account, named after the topic;
+`--keep-bridge` opts out. `topic rebridge "<name>"|--all` does the same to a topic
+that is already in the right place. The transcript is copied to `<topic>/backups/`
+first, since editing one is unsupported.
+
 `move` takes the whole topic: registry entry, handoff docs, briefs, and **every
 transcript it can still resume** — the current session and every retired one in its
 `history`. The transcripts are the part that is easy to forget: `topic up` resumes by
