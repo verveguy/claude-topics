@@ -18,6 +18,7 @@
 #   topic prune                 Show topics that are truly dead — down, with no
 #                               transcript left to resume. --yes removes them.
 #   topic adopt "<name>"        Track a session topic did not launch — live (via
+#                               --dry-run shows what it would adopt, changing nothing.
 #                               ~/.claude/sessions/<pid>.json) or merely resumable
 #                               (via its transcript title). --pid / --dir / --title
 #                               disambiguate; --probe <token> handles a running but
@@ -887,6 +888,11 @@ adopt_resumable() {
     die "adopt: session ${uuid:0:8}… is currently RUNNING — adopt it live: topic adopt \"$name\" --pid <pid>"
   fi
 
+  # `dry` is set by cmd_adopt, our only caller (bash scoping makes it visible here).
+  if [[ "${dry:-0}" -eq 1 ]]; then
+    echo "would adopt \"$name\" -> session ${uuid:0:8}… (resumable, titled \"$title\", dir: ${dir:-${cwd:-$HOME}})"
+    return 0
+  fi
   reg_write "$name" name "$name" dir "${dir:-${cwd:-$HOME}}" sessionId "$uuid" \
             generation "1" state "down" adoptedAt "$(now_iso)"
   echo "Adopted \"$name\" -> session ${uuid:0:8}… (resumable, titled \"$title\", dir: ${dir:-${cwd:-$HOME}})"
@@ -911,9 +917,10 @@ adopt_resumable() {
 #   topic adopt "<name>" --probe <token> [--dir <dir>] [--exclude <uuid>]
 cmd_adopt() {
   local name="${1:?usage: topic adopt \"<name>\" [--pid <pid>] [--dir <dir>] | --probe <token>}"; shift
-  local probe="" dir="" exclude="" pid="" title=""
+  local probe="" dir="" exclude="" pid="" title="" dry=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --dry-run)    dry=1; shift ;;
       --probe)      probe="$2"; shift 2 ;;
       --dir)        dir="$2"; shift 2 ;;
       --pid)        pid="$2"; shift 2 ;;
@@ -938,6 +945,10 @@ cmd_adopt() {
       [[ -n "$kdir" ]] || kdir="$PWD"
     fi
 
+    if [[ $dry -eq 1 ]]; then
+      echo "would adopt \"$name\" -> session ${known_uuid:0:8}… ($([[ -n "$kpid" ]] && echo "running, pid $kpid" || echo "resumable, not running"), dir: $kdir)"
+      return 0
+    fi
     if [[ -n "$kpid" ]]; then
       reg_write "$name" name "$name" dir "$kdir" sessionId "$known_uuid" \
                 generation "1" state "adopted" adoptedAt "$(now_iso)" adoptedPid "$kpid"
@@ -1018,6 +1029,10 @@ cmd_adopt() {
     local sname; sname="$(printf '%s' "${rows[0]}" | cut -f4)"
     [[ -n "$dir" ]] || dir="${sdir:-$HOME}"
 
+    if [[ $dry -eq 1 ]]; then
+      echo "would adopt \"$name\" -> session ${uuid:0:8}… (running, pid $spid, advertised as \"${sname:-?}\", dir: $dir)"
+      return 0
+    fi
     reg_write "$name" name "$name" dir "$dir" sessionId "$uuid" \
               generation "1" state "adopted" adoptedAt "$(now_iso)" adoptedPid "$spid"
     echo "Adopted \"$name\" -> session ${uuid:0:8}… (pid $spid, advertised as \"${sname:-?}\", dir: $dir)"
@@ -1052,6 +1067,10 @@ cmd_adopt() {
     [[ -d "$dir" ]] || dir="$HOME"
   fi
 
+  if [[ $dry -eq 1 ]]; then
+    echo "would adopt \"$name\" -> session ${uuid:0:8}… (probe match, dir: $dir)"
+    return 0
+  fi
   reg_write "$name" name "$name" dir "$dir" sessionId "$uuid" \
             generation "1" state "adopted" adoptedAt "$(now_iso)"
   echo "Adopted \"$name\" -> session ${uuid:0:8}… (dir: $dir)"

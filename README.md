@@ -366,7 +366,9 @@ topic adopt "<name>" --probe <token> --exclude <your-own-session-uuid>
 your pick from an ambiguous list. It works for live and exited sessions alike:
 `topic` checks whether that UUID is currently running and registers it accordingly.
 
-`adopt` is non-destructive — it only records the UUID, directory, and pid.
+`adopt` is non-destructive — it only records the UUID, directory, and pid — and
+`--dry-run` reports what it would adopt without registering anything, which is the
+safe way to answer "is this session already a topic, and which one?".
 
 **Then claim it.** The adopted session is still running outside tmux. Starting it
 under `topic` would resume the same session UUID in a *second* process — two writers

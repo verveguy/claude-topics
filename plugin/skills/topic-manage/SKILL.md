@@ -97,7 +97,9 @@ Use `--probe` only when the target is running but **unnamed** — nothing to mat
 A session adopting *itself* already knows its UUID: `topic adopt "<name>"
 --session-id <uuid>`.
 
-`adopt` is non-destructive — it only records the UUID, directory, and pid.
+`adopt` is non-destructive — it only records the UUID, directory, and pid. Use
+`--dry-run` when you are *identifying* a session rather than adopting it: it reports
+the match and registers nothing.
 
 **Step 2 — claim it.** The adopted session is still running outside tmux. Starting it
 under topic management would resume the same session UUID in a *second* process — two
