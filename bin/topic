@@ -207,6 +207,28 @@ tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' "$f" "$2"
 
 now_iso() { date +%Y-%m-%dT%H:%M:%S%z; }
 
+# Where a profile's CONFIG lives — which is not simply "inside the profile dir".
+# With CLAUDE_CONFIG_DIR unset, Claude Code reads ~/.claude.json; set it to
+# ~/.claude and it reads ~/.claude/.claude.json instead. Same data directories
+# (projects/, sessions/), different config file, and therefore different onboarding
+# and account state. Verified 2026-08-09.
+config_file_of() {
+  if [[ "$1" == "$HOME/.claude" ]]; then printf '%s/.claude.json' "$HOME"
+  else printf '%s/.claude.json' "$1"; fi
+}
+
+# Has this profile finished first-run setup? A profile that has not will open on the
+# theme picker instead of a usable session.
+profile_onboarded() {
+  local f; f="$(config_file_of "$1")"
+  [[ -f "$f" ]] || return 1
+  python3 -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+sys.exit(0 if d.get("hasCompletedOnboarding") else 1)' "$f"
+}
+
 # Wait until a file stops changing (size + mtime steady twice in a row), up to ~5s.
 # A Claude session that has just been asked to exit keeps writing for a moment.
 settle() {
@@ -286,6 +308,24 @@ launch_session() {
     fi
     if printf '%s' "$pane" | grep -qiE "Welcome back|remote-control is active"; then
       break
+    fi
+    # First-run setup: the theme picker or a login prompt. `topic` must not answer
+    # these — picking a theme and choosing an account are the user's decisions — and
+    # waiting is pointless, so fail fast rather than time out and leave a session
+    # parked at a prompt that `is_up` would happily report as UP.
+    if printf '%s' "$pane" | grep -qiE "colorblind-friendly|Select login method|Choose the text style"; then
+      tmux kill-session -t "=$tn" 2>/dev/null || true
+      echo >&2
+      echo "topic: profile $CLAUDE_DIR has not completed first-run setup." >&2
+      echo "  The session opened on the theme/login prompt, which topic will not answer" >&2
+      echo "  for you. Run it once interactively, then retry:" >&2
+      if [[ -n "$PROFILE_TAG" ]]; then
+        echo "    CLAUDE_CONFIG_DIR=$CLAUDE_DIR claude" >&2
+      else
+        echo "    claude" >&2
+      fi
+      echo "  Its config file is $(config_file_of "$CLAUDE_DIR")" >&2
+      die "profile not set up"
     fi
     sleep 0.5; printf "."
   done
@@ -1077,9 +1117,11 @@ cmd_profiles() {
     if [[ -d "$d/topics" ]]; then
       n="$(find "$d/topics" -maxdepth 2 -name topic.json -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
     fi
-    printf '  %s %-24s %-10s %s topic(s)\n' \
+    local note=""
+    profile_onboarded "$d" || note="  ** first-run setup not finished — sessions will not start"
+    printf '  %s %-26s %-11s %2s topic(s)%s\n' \
       "$([[ "$d" == "$CLAUDE_DIR" ]] && echo '*' || echo ' ')" \
-      "$d" "${tag:-(default)}" "$n"
+      "$d" "${tag:-(default)}" "$n" "$note"
   done < <(list_profiles)
   echo
   echo "  * = active. Use another with: CLAUDE_CONFIG_DIR=<dir> topic <cmd>"
@@ -1112,6 +1154,14 @@ cmd_move() {
   [[ -d "$dst" ]] || die "move: no such profile directory: $dst"
   [[ -d "$dst/projects" || -f "$dst/.claude.json" ]] ||
     die "move: $dst does not look like a Claude Code config dir (no projects/ or .claude.json)"
+
+  # Moving into a profile that cannot start a session strands the topic there.
+  if ! profile_onboarded "$dst"; then
+    echo "move: profile $dst has not completed first-run setup, so \"$name\" could not" >&2
+    echo "  be started there. Run it once interactively first:" >&2
+    echo "    CLAUDE_CONFIG_DIR=$dst claude" >&2
+    die "destination profile not set up"
+  fi
 
   local src_dir; src_dir="$(topic_dir "$name")"
   [[ -f "$src_dir/topic.json" ]] || die "no such topic in this profile: \"$name\""

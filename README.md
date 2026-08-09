@@ -349,11 +349,22 @@ Learned the hard way; don't re-derive them.
   `name`, `sessionId`, `cwd`, `tmux`. Best starting point for any "which session is
   this?" question, and what `topic adopt` reads. Records are **not** removed when a
   session exits, so always re-check the pid before trusting one.
-- **`CLAUDE_CONFIG_DIR=~/.claude` is not the same as leaving it unset.** Unset reads
-  `~/.claude.json` (the long-established config); setting it to the default directory
-  reads `~/.claude/.claude.json` instead, which on an existing install is a stub with
-  no `hasCompletedOnboarding`. The session then opens on the first-run theme picker.
-  Treat "default profile" as "variable absent", not "variable set to the default".
+- **`CLAUDE_CONFIG_DIR=~/.claude` is not the same as leaving it unset.** The
+  *directories* are identical — same `projects/`, `sessions/`, `topics/` — but the
+  **config file** is not: unset reads `~/.claude.json`, set reads
+  `~/.claude/.claude.json`. Those carry onboarding state, account, `userID` and
+  `machineID`, so setting it to the default directory silently selects a *second
+  identity over the same data*, typically one that has never completed onboarding.
+  That is why the failure is so quiet: transcripts and sessions resolve correctly
+  either way. Treat "default profile" as "variable absent", never "variable set to
+  the default", and read a profile's config from `~/.claude.json` for the default
+  profile and `<dir>/.claude.json` for every other.
+- **A profile that has not completed first-run setup cannot be automated.** It opens
+  on the theme picker (or a login prompt), which `topic` deliberately will not answer
+  — theme and account are the user's choices. It detects that text, kills the session
+  it just started, and says so, rather than timing out and leaving a session parked at
+  a prompt that `is_up` would report as UP. Create a profile by hand first:
+  `CLAUDE_CONFIG_DIR=~/.claude-new claude`.
 - **An exiting session keeps writing briefly.** `topic down` returns once claude has
   left the pane, but the process can still flush a final `file-history-snapshot`
   record afterwards — which recreates the transcript at its old path after a move.
