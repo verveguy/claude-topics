@@ -35,6 +35,8 @@
 #
 #   topic profiles              Every Claude Code profile, and its topic count.
 #   topic move "<name>" --to <profile>
+#                               (--carry-approvals copies your trust / external-import
+#                               answers for its directory into the destination.)
 #                               Move a topic — registry, docs, and transcripts — into
 #                               another profile. A live topic is put down and brought
 #                               back up on the far side (--stay-down to leave it down).
@@ -230,6 +232,19 @@ now_iso() { date +%Y-%m-%dT%H:%M:%S%z; }
 config_file_of() {
   if [[ "$1" == "$HOME/.claude" ]]; then printf '%s/.claude.json' "$HOME"
   else printf '%s/.claude.json' "$1"; fi
+}
+
+# A per-project flag from a profile's config, e.g. hasClaudeMdExternalIncludesApproved.
+# These approvals are recorded per profile and do NOT travel with a moved topic.
+project_flag() {  # project_flag <config-file> <work-dir> <key>
+  [[ -f "$1" ]] || { printf ''; return 0; }
+  python3 -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: print(""); sys.exit(0)
+p=(d.get("projects") or {}).get(sys.argv[2]) or {}
+v=p.get(sys.argv[3], "")
+print("" if v is None else v)' "$1" "$2" "$3"
 }
 
 # Has this profile finished first-run setup? A profile that has not will open on the
@@ -1172,7 +1187,7 @@ cmd_profiles() {
 # `claude --resume` only looks inside its own profile's projects/ directory. Move the
 # registry without the transcript and the topic arrives unresumable.
 cmd_move() {
-  local name="" to="" copy=0 dry=0 stay_down=0 keep_bridge=0
+  local name="" to="" copy=0 dry=0 stay_down=0 keep_bridge=0 force=0 carry=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --to)          to="$2"; shift 2 ;;
@@ -1180,6 +1195,8 @@ cmd_move() {
       --dry-run)     dry=1; shift ;;
       --stay-down)   stay_down=1; shift ;;
       --keep-bridge) keep_bridge=1; shift ;;
+      --force)       force=1; shift ;;
+      --carry-approvals) carry=1; shift ;;
       *) if [[ -z "$name" ]]; then name="$1"; else die "move: unexpected argument: $1"; fi; shift ;;
     esac
   done
@@ -1221,6 +1238,33 @@ cmd_move() {
       echo "  and topic cannot stop a session it did not launch." >&2
       echo "  Exit that session (/exit in its window), then re-run this move." >&2
       die "refusing to move a live adopted session"
+    fi
+  fi
+
+  # Per-project approvals are recorded per profile and do NOT move with the topic, so
+  # a topic can arrive somewhere it is not allowed to start. The trust dialog is
+  # auto-accepted, but the external-CLAUDE.md-imports question is a security decision
+  # topic will not answer — and it only ever gets approved by being asked, so the
+  # source having approved it is exactly the signal that the destination will be
+  # asked too. Check BEFORE moving anything.
+  local work_dir; work_dir="$(reg_read "$name" dir)"
+  if [[ -n "$work_dir" ]]; then
+    local src_ok dst_ok
+    src_ok="$(project_flag "$(config_file_of "$CLAUDE_DIR")" "$work_dir" hasClaudeMdExternalIncludesApproved)"
+    dst_ok="$(project_flag "$(config_file_of "$dst")" "$work_dir" hasClaudeMdExternalIncludesApproved)"
+    if [[ "$src_ok" == "True" && "$dst_ok" != "True" ]]; then
+      echo "move: $dst has not approved external CLAUDE.md imports for $work_dir." >&2
+      echo "  That approval is per profile and does not travel with the topic, so" >&2
+      echo "  \"$name\" would arrive unable to start. Answer it once:" >&2
+      echo "    (cd $work_dir && CLAUDE_CONFIG_DIR=$dst claude)" >&2
+      echo "  then re-run this move. (--force moves anyway and leaves it down.)" >&2
+      if [[ $carry -eq 1 ]]; then
+        echo "  --carry-approvals given: copying your existing approval across." >&2
+      else
+        echo "  Or copy your existing approval across: --carry-approvals" >&2
+        [[ $force -eq 1 ]] || die "destination profile would not be able to start it"
+        echo "  --force given: moving anyway." >&2
+      fi
     fi
   fi
 
@@ -1350,6 +1394,30 @@ tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' \
     fi
   fi
 
+  # Carry the user's own prior approvals for THIS directory into the destination.
+  # Deliberately limited to the trust and external-imports answers: the same project
+  # entry also holds allowedTools, and copying a permission allowlist into a profile
+  # that never granted it would be a silent escalation.
+  if [[ $carry -eq 1 && -n "$work_dir" ]]; then
+    python3 -c '
+import json,os,sys
+src,dstf,wd = sys.argv[1],sys.argv[2],sys.argv[3]
+KEYS=("hasTrustDialogAccepted","hasClaudeMdExternalIncludesApproved")
+try: s=json.load(open(src))
+except Exception: sys.exit(0)
+sp=(s.get("projects") or {}).get(wd) or {}
+carry={k:sp[k] for k in KEYS if k in sp}
+if not carry: sys.exit(0)
+try: d=json.load(open(dstf))
+except Exception: d={}
+d.setdefault("projects",{}).setdefault(wd,{}).update(carry)
+tmp=dstf+".tmp"
+json.dump(d,open(tmp,"w"),indent=2)
+os.replace(tmp,dstf)
+print("  carried approvals: " + ", ".join(f"{k}={v}" for k,v in carry.items()))' \
+      "$(config_file_of "$CLAUDE_DIR")" "$(config_file_of "$dst")" "$work_dir"
+  fi
+
   local tag; tag="$(profile_tag_of "$dst")"
 
   # Bring it back up on the far side, by re-invoking ourselves against the
@@ -1361,10 +1429,20 @@ tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' \
     echo "Bringing \"$name\" back up in $dst"
     local self_path; self_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     # Unset rather than set-to-default for the default profile — see launch_session.
+    local started=1
     if [[ "$dst" == "$HOME/.claude" ]]; then
-      env -u CLAUDE_CONFIG_DIR "$self_path" up "$name" | sed 's/^/  /'
+      env -u CLAUDE_CONFIG_DIR "$self_path" up "$name" 2>&1 | sed 's/^/  /' || started=0
     else
-      CLAUDE_CONFIG_DIR="$dst" "$self_path" up "$name" | sed 's/^/  /'
+      CLAUDE_CONFIG_DIR="$dst" "$self_path" up "$name" 2>&1 | sed 's/^/  /' || started=0
+    fi
+    if [[ $started -eq 0 ]]; then
+      # The move itself succeeded — say so plainly rather than letting a failed
+      # restart read as a failed move.
+      echo ""
+      echo "\"$name\" MOVED to $dst but could not be started there (see above)."
+      echo "  Nothing is lost: it is down and resumable. Once the blocker is cleared:"
+      echo "    CLAUDE_CONFIG_DIR=$dst topic up \"$name\""
+      return 1
     fi
     echo ""
     echo "Moved and running. It is now a ${tag:-default}-profile topic:"

@@ -175,6 +175,26 @@ topic move "<name>" --to v3rv         # move a topic into another profile
 topic move "<name>" --to default --dry-run
 ```
 
+**Per-project approvals do not travel with a topic.** Whether a directory is trusted,
+and whether its CLAUDE.md may import files from outside it, is recorded per profile —
+so a topic can arrive somewhere it is not allowed to start. `move` checks before it
+moves anything: if the source profile approved external imports for that directory
+and the destination has not, it stops and tells you how to answer it. The source
+having approved is precisely the signal that the destination will be asked, since the
+flag only becomes true by being answered.
+
+`--carry-approvals` copies your existing answers for that one directory into the
+destination instead. It is deliberately limited to the trust and external-import
+answers: the same project entry also holds `allowedTools`, and copying a permission
+allowlist into a profile that never granted it would be a silent escalation. It also
+writes to the destination profile's `.claude.json`, which running sessions write too,
+so prefer it when that profile is quiet. `--force` moves anyway and leaves the topic
+down.
+
+If a live move does fail to restart, the move itself has still succeeded — the topic
+is down, resumable, and reported as such, rather than the failure reading as a lost
+move.
+
 `move` also **re-registers Remote Control**. A session's RC identity — the name shown
 in the Claude UI *and the account it appears under* — is pinned to a bridge recorded
 inside the transcript, and Claude Code rejoins that bridge on resume, so
