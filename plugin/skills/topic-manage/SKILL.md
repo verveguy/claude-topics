@@ -139,5 +139,11 @@ procedure. `topic whoami` names the topic the current session is sitting in.
   other's `topic list` — that is expected, not missing data. `topic list` names the
   profile when it is not the default. Non-default profiles get their tmux sessions
   prefixed (`work/Fantasy Images`), which is the name to use with `tmux attach`.
+  - `topic profiles` — every profile and its topic count; `topic list --all` — every
+    topic across all of them. Reach for these before telling a user a topic is
+    missing; it is probably in another profile.
+  - `topic move "<name>" --to <profile>` moves a topic between profiles, transcripts
+    included. It requires the topic to be **down** first. Show the user
+    `--dry-run` output before running it for real.
 - Do not adopt Fabrik workers or other automation — only the user's own interactive
   sessions. Fabrik worktree sessions live under `.fabrik/worktrees/`.

@@ -166,7 +166,30 @@ CLAUDE_CONFIG_DIR=~/.claude-work topic list
 CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh   # install into that profile too
 ```
 
-Three things make this safe rather than merely possible:
+Topics are per-profile, and the tool can see across all of them:
+
+```bash
+topic profiles                        # every profile, and how many topics it holds
+topic list --all                      # every topic in every profile
+topic move "<name>" --to v3rv         # move a topic into another profile
+topic move "<name>" --to default --dry-run
+```
+
+`move` takes the whole topic: registry entry, handoff docs, briefs, and **every
+transcript it can still resume** — the current session and every retired one in its
+`history`. The transcripts are the part that is easy to forget: `topic up` resumes by
+UUID and `claude --resume` only looks inside its own profile's `projects/`, so a
+registry moved on its own arrives unresumable, and leaving history behind quietly
+breaks the emergency path back to a pre-handoff session.
+
+It refuses to move a topic that is **up** — a live session's process, tmux session
+and open transcript belong to the profile that launched it, so put it down first. It
+also refuses to overwrite an existing topic of the same name in the destination.
+`--copy` leaves the original in place; be aware that resuming both copies afterwards
+forks the transcript. The destination records `movedFrom`/`movedAt`, since after a
+move the old profile has no trace of where the topic went.
+
+Three things make profile separation safe rather than merely possible:
 
 - **Sessions are launched with the profile pinned** to the command line. A detached
   tmux session does not reliably inherit the environment — the tmux server may long

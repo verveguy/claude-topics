@@ -10,7 +10,8 @@
 #   topic down "<name>"         Put down: terminate the session, stay resumable.
 #   topic down-all              Put every live topic in this profile down. Skips the
 #                               calling session unless --include-self. --dry-run.
-#   topic list                  Show every topic and whether it is up or down.
+#   topic list [--all]          Show every topic and whether it is up or down.
+#                               --all crosses every profile on the machine.
 #   topic status "<name>"       Detail for one topic.
 #   topic forget "<name>"       Stop tracking a topic (keeps handoff docs; --purge
 #                               removes them). The session itself is untouched.
@@ -31,6 +32,12 @@
 #                               brief. --from "<parent>" defaults to the calling
 #                               topic; the directory defaults to the parent's.
 #   topic whoami                Name the topic the caller is sitting in.
+#
+#   topic profiles              Every Claude Code profile, and its topic count.
+#   topic move "<name>" --to <profile>
+#                               Move a topic — registry, docs, and transcripts — into
+#                               another profile. --copy leaves the original, --dry-run
+#                               shows the plan.
 #
 #   topic ensure-dispatcher     Start the Dispatcher topic if it is not up.
 #                               (Run by launchd at login and every 5 minutes.)
@@ -62,12 +69,36 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
 TOPICS_ROOT="${CLAUDE_TOPICS_ROOT:-$CLAUDE_DIR/topics}"
 
-# Short label for the active profile: ~/.claude-v3rv -> "v3rv", default -> "".
-profile_tag() {
-  [[ "$CLAUDE_DIR" == "$HOME/.claude" ]] && { printf ''; return 0; }
-  basename "$CLAUDE_DIR" | sed 's/^\.//; s/^claude-//'
+# Short label for a profile: ~/.claude-v3rv -> "v3rv", the default profile -> "".
+# Takes the profile as an argument so cross-profile commands can compute it for a
+# profile other than the active one.
+profile_tag_of() {
+  [[ "$1" == "$HOME/.claude" ]] && { printf ''; return 0; }
+  basename "$1" | sed 's/^\.//; s/^claude-//'
 }
-PROFILE_TAG="$(profile_tag)"
+PROFILE_TAG="$(profile_tag_of "$CLAUDE_DIR")"
+
+# Every Claude Code profile on this machine: the default, plus ~/.claude-* that
+# actually look like config dirs (a stray ~/.claude-backup should not count).
+list_profiles() {
+  printf '%s\n' "$HOME/.claude"
+  local d
+  for d in "$HOME"/.claude-*; do
+    [[ -d "$d" ]] || continue
+    [[ -d "$d/projects" || -f "$d/.claude.json" ]] || continue
+    printf '%s\n' "$d"
+  done
+}
+
+# "v3rv" -> ~/.claude-v3rv, "default" -> ~/.claude, an absolute path -> itself.
+resolve_profile() {
+  case "${1:-}" in
+    "")        printf '%s/.claude' "$HOME" ;;
+    default)   printf '%s/.claude' "$HOME" ;;
+    /*)        printf '%s' "${1%/}" ;;
+    *)         printf '%s/.claude-%s' "$HOME" "$1" ;;
+  esac
+}
 
 # Each profile runs its own Dispatcher, so their names must differ — otherwise they
 # collide as topic names, as Remote Control names in ListAgents, and in the tmux
@@ -106,7 +137,13 @@ slugify() {
 
 # tmux forbids ':' and '.' in session names; the display name keeps them. Non-default
 # profiles are prefixed so their topics cannot collide with the default profile's.
-tmux_name() { printf '%s%s' "$TMUX_PREFIX" "$(printf '%s' "$1" | tr ':.' '--')"; }
+tmux_name() { tmux_name_in "$PROFILE_TAG" "$1"; }
+
+# tmux_name_in <profile-tag> <display-name> — the same mapping for any profile.
+tmux_name_in() {
+  local pre=""; [[ -n "$1" ]] && pre="$1/"
+  printf '%s%s' "$pre" "$(printf '%s' "$2" | tr ':.' '--')"
+}
 
 topic_dir()  { printf '%s/%s' "$TOPICS_ROOT" "$(slugify "$1")"; }
 topic_json() { printf '%s/topic.json' "$(topic_dir "$1")"; }
@@ -912,8 +949,8 @@ cmd_status() {
   python3 -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-for k in ("dir","sessionId","generation","forkedFrom","seededFrom",
-          "lastPickedUp","lastPutDown","lastHandoff"):
+for k in ("dir","sessionId","generation","forkedFrom","seededFrom","movedFrom",
+          "movedAt","lastPickedUp","lastPutDown","lastHandoff"):
     if d.get(k): print(f"  {k}: {d[k]}")
 forks=d.get("forks") or []
 if forks: print("  forks: " + ", ".join(forks))
@@ -922,6 +959,31 @@ if h: print(f"  retired sessions: {len(h)}")' "$f"
 }
 
 cmd_list() {
+  # --all crosses every profile on the machine, so you can see the whole picture
+  # without knowing which profile a topic lives in.
+  if [[ "${1:-}" == "--all" ]]; then
+    local p tag root d name state any=0
+    while IFS= read -r p; do
+      root="$p/topics"
+      [[ -d "$root" ]] || continue
+      tag="$(profile_tag_of "$p")"
+      for d in "$root"/*/; do
+        [[ -f "$d/topic.json" ]] || continue
+        name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+        [[ -n "$name" ]] || continue
+        any=1
+        if tmux has-session -t "=$(tmux_name_in "$tag" "$name")" 2>/dev/null; then
+          state="UP    "
+        else
+          state="down  "
+        fi
+        printf '  %-7s %-12s %s\n' "$state" "${tag:-(default)}" "$name"
+      done
+    done < <(list_profiles)
+    [[ $any -eq 1 ]] || echo "  (no topics in any profile)"
+    return 0
+  fi
+
   mkdir -p "$TOPICS_ROOT"
   # Say which profile these topics belong to whenever it is not the default one —
   # otherwise a short list looks like topics have gone missing.
@@ -981,6 +1043,133 @@ cmd_down_all() {
   fi
 }
 
+# Name every profile on this machine, marking the active one.
+cmd_profiles() {
+  local d tag n
+  while IFS= read -r d; do
+    tag="$(profile_tag_of "$d")"
+    n=0
+    if [[ -d "$d/topics" ]]; then
+      n="$(find "$d/topics" -maxdepth 2 -name topic.json -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
+    fi
+    printf '  %s %-24s %-10s %s topic(s)\n' \
+      "$([[ "$d" == "$CLAUDE_DIR" ]] && echo '*' || echo ' ')" \
+      "$d" "${tag:-(default)}" "$n"
+  done < <(list_profiles)
+  echo
+  echo "  * = active. Use another with: CLAUDE_CONFIG_DIR=<dir> topic <cmd>"
+}
+
+# Move a topic — registry, handoff docs, briefs, and every transcript it can still
+# resume — from this profile into another one.
+#
+#   topic move "<name>" --to <profile> [--copy] [--dry-run]
+#
+# The transcript is the part that matters: `topic up` resumes by UUID, and
+# `claude --resume` only looks inside its own profile's projects/ directory. Move the
+# registry without the transcript and the topic arrives unresumable.
+cmd_move() {
+  local name="" to="" copy=0 dry=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --to)      to="$2"; shift 2 ;;
+      --copy)    copy=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      *) if [[ -z "$name" ]]; then name="$1"; else die "move: unexpected argument: $1"; fi; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || die "usage: topic move \"<name>\" --to <profile> [--copy] [--dry-run]"
+  [[ -n "$to" ]]   || die "move: --to <profile> is required (a tag like \"v3rv\", \"default\", or a path)"
+
+  local dst; dst="$(resolve_profile "$to")"
+  [[ "$dst" != "$CLAUDE_DIR" ]] || die "move: \"$name\" is already in $dst"
+  [[ -d "$dst" ]] || die "move: no such profile directory: $dst"
+  [[ -d "$dst/projects" || -f "$dst/.claude.json" ]] ||
+    die "move: $dst does not look like a Claude Code config dir (no projects/ or .claude.json)"
+
+  local src_dir; src_dir="$(topic_dir "$name")"
+  [[ -f "$src_dir/topic.json" ]] || die "no such topic in this profile: \"$name\""
+
+  # A live session belongs to the profile that launched it — its process, its tmux
+  # session, its open transcript. Moving those out from under it would corrupt the
+  # transcript, so require it to be down first.
+  is_up "$name" && die "\"$name\" is up — \`topic down \"$name\"\` first, then move it"
+
+  local dst_dir="$dst/topics/$(slugify "$name")"
+  [[ -e "$dst_dir" ]] && die "move: \"$name\" already exists in $dst ($dst_dir)"
+
+  # Every session this topic can still resume: the current one plus every retired
+  # session in its history. Leaving history transcripts behind would silently break
+  # the emergency path back to a pre-handoff session.
+  local uuids=() u
+  while IFS= read -r u; do [[ -n "$u" ]] && uuids+=("$u"); done < <(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+seen=[]
+if d.get("sessionId"): seen.append(d["sessionId"])
+for h in (d.get("history") or []):
+    if h.get("sessionId"): seen.append(h["sessionId"])
+print("\n".join(dict.fromkeys(seen)))' "$src_dir/topic.json")
+
+  local verb="Moving"; [[ $copy -eq 1 ]] && verb="Copying"
+  echo "$verb \"$name\": $CLAUDE_DIR -> $dst"
+  echo "  registry: $src_dir -> $dst_dir"
+
+  # Work out each transcript's destination before touching anything, so a dry run
+  # shows the whole picture and a real run does not stop half-done.
+  local moves=() t rel
+  for u in "${uuids[@]}"; do
+    t="$(find "$CLAUDE_DIR/projects" -name "$u.jsonl" -print -quit 2>/dev/null || true)"
+    if [[ -z "$t" ]]; then
+      echo "  transcript ${u:0:8}…: not found in this profile (already gone) — skipping"
+      continue
+    fi
+    rel="$(basename "$(dirname "$t")")"          # the project-slug directory
+    moves+=("$t|$dst/projects/$rel/$u.jsonl")
+    echo "  transcript ${u:0:8}…: -> $dst/projects/$rel/"
+  done
+
+  if [[ $dry -eq 1 ]]; then
+    echo ""
+    echo "Dry run — nothing moved."
+    return 0
+  fi
+
+  local m from into
+  for m in "${moves[@]}"; do
+    from="${m%%|*}"; into="${m##*|}"
+    mkdir -p "$(dirname "$into")"
+    [[ -e "$into" ]] && die "move: $into already exists — refusing to overwrite"
+    if [[ $copy -eq 1 ]]; then cp "$from" "$into"; else mv "$from" "$into"; fi
+  done
+
+  mkdir -p "$(dirname "$dst_dir")"
+  if [[ $copy -eq 1 ]]; then cp -R "$src_dir" "$dst_dir"; else mv "$src_dir" "$dst_dir"; fi
+
+  # Record where it came from: after a move the old profile has no trace of it, and
+  # "why is this topic here?" is a real question months later.
+  python3 -c '
+import json,os,sys
+f,src=sys.argv[1],sys.argv[2]
+d=json.load(open(f))
+d["movedFrom"]=src
+d["movedAt"]=sys.argv[3]
+tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' \
+    "$dst_dir/topic.json" "$CLAUDE_DIR" "$(now_iso)"
+
+  local tag; tag="$(profile_tag_of "$dst")"
+  echo ""
+  echo "Done. Pick it up in its new profile with:"
+  if [[ -n "$tag" ]]; then
+    echo "  CLAUDE_CONFIG_DIR=$dst topic up \"$name\""
+    echo "  (its tmux session will be \"$(tmux_name_in "$tag" "$name")\")"
+  else
+    echo "  topic up \"$name\""
+  fi
+  [[ $copy -eq 1 ]] && echo "  The original is still in $CLAUDE_DIR — resuming both would fork the transcript."
+  return 0
+}
+
 cmd_ensure_dispatcher() {
   if is_up "$DISPATCHER_NAME"; then
     echo "\"$DISPATCHER_NAME\" is up."
@@ -1002,6 +1191,8 @@ case "${1:-}" in
   adopt)             shift; cmd_adopt "$@" ;;
   forget)            shift; cmd_forget "$@" ;;
   down-all)          shift; cmd_down_all "$@" ;;
+  profiles)          shift; cmd_profiles "$@" ;;
+  move)              shift; cmd_move "$@" ;;
   prune)             shift; cmd_prune "$@" ;;
   down)              shift; cmd_down "$@" ;;
   list|ls)           shift; cmd_list "$@" ;;
