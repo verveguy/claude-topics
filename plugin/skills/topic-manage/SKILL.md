@@ -133,6 +133,11 @@ procedure. `topic whoami` names the topic the current session is sitting in.
 - Sessions are launched with both `--remote-control "<name>"` and `--name "<name>"`.
   Both are required: `--remote-control` alone leaves the session advertising an
   auto-derived `<dir>-<hash>` name that cannot be addressed by topic name.
-- State lives in `~/.claude/topics/<slug>/topic.json`.
+- State lives in `<profile>/topics/<slug>/topic.json`.
+- **Profiles:** `topic` follows `CLAUDE_CONFIG_DIR` like `claude` does. If the user
+  runs more than one profile, topics are per-profile and do not appear in each
+  other's `topic list` — that is expected, not missing data. `topic list` names the
+  profile when it is not the default. Non-default profiles get their tmux sessions
+  prefixed (`work/Fantasy Images`), which is the name to use with `tmux attach`.
 - Do not adopt Fabrik workers or other automation — only the user's own interactive
   sessions. Fabrik worktree sessions live under `.fabrik/worktrees/`.

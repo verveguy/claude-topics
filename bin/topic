@@ -44,10 +44,34 @@
 #
 # Singleton: at most one live session per topic, enforced by an exact-match tmux
 # check plus an atomic lock. Starting a topic that is already up is a no-op.
+#
+# PROFILES: honours CLAUDE_CONFIG_DIR, exactly as `claude` does. Every path — the
+# topic registry, session records, transcripts — comes from it, sessions are launched
+# with it, and non-default profiles get their tmux sessions namespaced so two
+# profiles cannot fight over one topic name. Set it per shell to manage a profile:
+#   CLAUDE_CONFIG_DIR=~/.claude-work topic list
 set -euo pipefail
 
-TOPICS_ROOT="${CLAUDE_TOPICS_ROOT:-$HOME/.claude/topics}"
+# Which Claude Code profile are we managing? Claude Code reads CLAUDE_CONFIG_DIR, so
+# honour exactly the same variable: `topic` must look at the same sessions,
+# transcripts and registry as the `claude` it is driving. Everything below derives
+# from this — nothing hardcodes ~/.claude.
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+TOPICS_ROOT="${CLAUDE_TOPICS_ROOT:-$CLAUDE_DIR/topics}"
 DISPATCHER_NAME="${CLAUDE_DISPATCHER_NAME:-Dispatcher}"
+
+# tmux is machine-global, not per-profile: two profiles each running a topic called
+# "Fantasy Images" would fight over one tmux session, and `topic up` would report the
+# other profile's session as already up. So namespace non-default profiles. The
+# default profile keeps bare names, so existing sessions and the documented
+# `tmux attach -t "<topic>"` keep working unchanged.
+#   ~/.claude        -> ""          "Fantasy Images"
+#   ~/.claude-v3rv   -> "v3rv/"     "v3rv/Fantasy Images"
+TMUX_PREFIX=""
+if [[ "$CLAUDE_DIR" != "$HOME/.claude" ]]; then
+  TMUX_PREFIX="$(basename "$CLAUDE_DIR" | sed 's/^\.//; s/^claude-//')/"
+fi
 
 # launchd gives us a minimal PATH; make sure the tools we need are findable.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
@@ -65,8 +89,9 @@ slugify() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'
 }
 
-# tmux forbids ':' and '.' in session names; the display name keeps them.
-tmux_name() { printf '%s' "$1" | tr ':.' '--'; }
+# tmux forbids ':' and '.' in session names; the display name keeps them. Non-default
+# profiles are prefixed so their topics cannot collide with the default profile's.
+tmux_name() { printf '%s%s' "$TMUX_PREFIX" "$(printf '%s' "$1" | tr ':.' '--')"; }
 
 topic_dir()  { printf '%s/%s' "$TOPICS_ROOT" "$(slugify "$1")"; }
 topic_json() { printf '%s/topic.json' "$(topic_dir "$1")"; }
@@ -160,7 +185,13 @@ launch_session() {
 
   mkdir -p "$dir"; dir="$(cd "$dir" && pwd)"
 
+  # Pin the profile onto the command itself. A detached tmux session does NOT
+  # reliably inherit our environment — the tmux server may long predate us — and a
+  # session launched under the wrong profile writes its transcript somewhere this
+  # `topic` cannot see, breaking adopt/prune/resume in confusing ways.
   local cmd="claude"
+  [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] &&
+    cmd="CLAUDE_CONFIG_DIR=$(printf '%q' "$CLAUDE_CONFIG_DIR") claude"
   local a; for a in "$@"; do cmd+=" $(printf '%q' "$a")"; done
 
   tmux new-session -d -s "$tn" -c "$dir"
@@ -518,7 +549,7 @@ cmd_forget() {
 transcript_of() {
   local uuid="$1"
   [[ -n "$uuid" ]] || { printf ''; return 0; }
-  find "$HOME/.claude/projects" -name "$uuid.jsonl" -print -quit 2>/dev/null || printf ''
+  find "$CLAUDE_DIR/projects" -name "$uuid.jsonl" -print -quit 2>/dev/null || printf ''
 }
 
 # The working directory a transcript recorded for itself. More reliable than
@@ -593,14 +624,14 @@ cmd_prune() {
 live_sessions() {
   python3 -c '
 import glob, json, os, sys
-for f in sorted(glob.glob(os.path.expanduser("~/.claude/sessions/*.json"))):
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "sessions", "*.json"))):
     try: d = json.load(open(f))
     except Exception: continue
     pid, sid = d.get("pid"), d.get("sessionId")
     if not pid or not sid: continue
     try: os.kill(int(pid), 0)          # stale record from an exited session
     except OSError: continue
-    print("\t".join(str(x) for x in (pid, sid, d.get("cwd",""), d.get("name",""))))'
+    print("\t".join(str(x) for x in (pid, sid, d.get("cwd",""), d.get("name",""))))' "$CLAUDE_DIR"
 }
 
 # A session that has EXITED still carries its name: the transcript holds
@@ -631,7 +662,7 @@ except Exception: sys.exit(0)
 print("\t".join((os.path.basename(f)[:-6], sys.argv[4],
                  time.strftime("%Y-%m-%d %H:%M", time.localtime(os.stat(f).st_mtime)))))' \
       "$f" "$want" "$last" "$(cwd_of "$f")"
-  done < <(grep -rl --include='*.jsonl' -F "\"customTitle\":\"$want\"" "$HOME/.claude/projects" 2>/dev/null || true) \
+  done < <(grep -rl --include='*.jsonl' -F "\"customTitle\":\"$want\"" "$CLAUDE_DIR/projects" 2>/dev/null || true) \
     | sort -t'	' -k3,3r
 }
 
@@ -825,7 +856,7 @@ cmd_adopt() {
     return 0
   fi
 
-  local projects="$HOME/.claude/projects"
+  local projects="$CLAUDE_DIR/projects"
   local hits=() f uuid
   while IFS= read -r f; do
     uuid="$(basename "$f" .jsonl)"
@@ -877,6 +908,9 @@ if h: print(f"  retired sessions: {len(h)}")' "$f"
 
 cmd_list() {
   mkdir -p "$TOPICS_ROOT"
+  # Say which profile these topics belong to whenever it is not the default one —
+  # otherwise a short list looks like topics have gone missing.
+  [[ -n "$TMUX_PREFIX" ]] && echo "  (profile: $CLAUDE_DIR)"
   local found=0 d name state
   for d in "$TOPICS_ROOT"/*/; do
     [[ -f "$d/topic.json" ]] || continue

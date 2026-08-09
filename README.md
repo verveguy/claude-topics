@@ -153,6 +153,36 @@ terminate the session you are sitting in.
 topic whoami          # which topic am I in? (reads the tmux session name)
 ```
 
+### Profiles
+
+`topic` honours **`CLAUDE_CONFIG_DIR`**, exactly as `claude` does. If you run more
+than one Claude Code profile, set it and everything follows — registry, session
+records, transcripts, and the profile the launched session itself runs under:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-work topic list
+CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh   # install into that profile too
+```
+
+Three things make this safe rather than merely possible:
+
+- **Sessions are launched with the profile pinned** to the command line. A detached
+  tmux session does not reliably inherit the environment — the tmux server may long
+  predate it — and a session started under the wrong profile writes its transcript
+  where `topic` cannot see it, breaking `adopt`, `prune`, and resume in ways that
+  look like data loss.
+- **tmux session names are namespaced** for non-default profiles (`work/Fantasy
+  Images`), because tmux is machine-global. Without that, two profiles running a
+  topic of the same name fight over one session and `topic up` reports the *other*
+  profile's session as already up. The default profile keeps bare names, so existing
+  sessions and `tmux attach -t "<topic>"` are unaffected.
+- **The launchd agent is per-profile** — its own label, log, and a baked-in
+  `CLAUDE_CONFIG_DIR`. launchd starts with a bare environment, so without that the
+  Dispatcher would manage the default profile whichever profile installed it.
+
+`topic list` prints the profile whenever it is not the default, so a short list
+cannot be mistaken for missing topics.
+
 ### The Dispatcher
 
 An always-up topic whose only job is running `topic` commands for the others. It

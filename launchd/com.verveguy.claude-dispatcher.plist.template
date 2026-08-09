@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.verveguy.claude-dispatcher</string>
+  <string>__LABEL__</string>
 
   <!--
     Keeps the "Dispatcher" Claude topic alive.
@@ -33,15 +33,20 @@
     <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>HOME</key>
     <string>__HOME__</string>
+    <!-- Pin the Claude Code profile: launchd starts with a bare environment, so
+         without this the Dispatcher would manage the default profile no matter
+         which one it was installed for. -->
+    <key>CLAUDE_CONFIG_DIR</key>
+    <string>__CONFIG_DIR__</string>
   </dict>
 
   <key>WorkingDirectory</key>
   <string>__HOME__</string>
 
   <key>StandardOutPath</key>
-  <string>__HOME__/Library/Logs/claude-dispatcher.log</string>
+  <string>__LOG__</string>
   <key>StandardErrorPath</key>
-  <string>__HOME__/Library/Logs/claude-dispatcher.log</string>
+  <string>__LOG__</string>
 
   <key>ProcessType</key>
   <string>Interactive</string>

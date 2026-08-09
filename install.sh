@@ -11,9 +11,23 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$HOME/.local/bin"
-PLUGIN_DEST="$HOME/.claude/skills/topics"
-PLIST_LABEL="com.verveguy.claude-dispatcher"
+
+# Install into whichever Claude Code profile is active, exactly as `claude` and
+# `topic` resolve it. A second profile can be installed alongside the first:
+#   CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+PLUGIN_DEST="$CLAUDE_DIR/skills/topics"
+
+# The launchd label and log must differ per profile, or installing the second
+# profile would silently replace the first profile's Dispatcher agent. The default
+# profile keeps the original label so existing installs are not orphaned.
+PROFILE_SUFFIX=""
+if [[ "$CLAUDE_DIR" != "$HOME/.claude" ]]; then
+  PROFILE_SUFFIX="-$(basename "$CLAUDE_DIR" | sed 's/^\.//; s/^claude-//')"
+fi
+PLIST_LABEL="com.verveguy.claude-dispatcher$PROFILE_SUFFIX"
 PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+LOG_PATH="$HOME/Library/Logs/claude-dispatcher$PROFILE_SUFFIX.log"
 
 FORCE=0; UNINSTALL=0
 for a in "$@"; do
@@ -34,7 +48,7 @@ if [[ $UNINSTALL -eq 1 ]]; then
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
   echo "Left in place (deliberately — this is your data, not the tool):"
-  say "$HOME/.claude/topics/   topic registry + handoff documents"
+  say "$CLAUDE_DIR/topics/   topic registry, handoff docs, and briefs"
   exit 0
 fi
 
@@ -57,14 +71,18 @@ link() {
 }
 
 echo "Installing from $REPO"
+say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
 link "$REPO/bin/topic" "$BIN/topic"
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
 # The plist cannot be a symlink to a template — launchd needs the real paths
 # baked in — so render it.
-sed "s|__HOME__|$HOME|g" \
-  "$REPO/launchd/$PLIST_LABEL.plist.template" > "$PLIST_DEST"
+sed -e "s|__HOME__|$HOME|g" \
+    -e "s|__LABEL__|$PLIST_LABEL|g" \
+    -e "s|__CONFIG_DIR__|$CLAUDE_DIR|g" \
+    -e "s|__LOG__|$LOG_PATH|g" \
+  "$REPO/launchd/com.verveguy.claude-dispatcher.plist.template" > "$PLIST_DEST"
 say "rendered $PLIST_DEST"
 
 launchctl unload "$PLIST_DEST" 2>/dev/null || true
