@@ -40,7 +40,7 @@
 #                               back up on the far side (--stay-down to leave it down).
 #                               --copy leaves the original, --dry-run shows the plan.
 #
-#   topic rebridge "<name>"|--all
+#   topic rebridge "<name>"|--all [--down-only]
 #                               Drop a session's recorded Remote Control bridge so the
 #                               next launch registers a fresh one — under the current
 #                               profile's account, named after the topic.
@@ -1207,6 +1207,23 @@ cmd_move() {
   # session, its open transcript — so a live topic is put down first and brought back
   # up on the far side. Both halves are lossless: the session UUID is stable and `up`
   # is a real --resume, so the session continues where it left off, in the new profile.
+  # An ADOPTED topic runs outside tmux, so is_up() cannot see it. Moving its
+  # transcript while the process still holds it open would corrupt it — and unlike a
+  # topic-managed session, topic cannot stop it for the user.
+  if [[ "$(reg_read "$name" state)" == "adopted" ]]; then
+    local apid asid live
+    apid="$(reg_read "$name" adoptedPid)"
+    asid="$(reg_read "$name" sessionId)"
+    live="$(live_sessions || true)"
+    if [[ -n "$apid" && "$live" == *"$apid	$asid	"* ]]; then
+      echo "\"$name\" was adopted and is still running as pid $apid, outside tmux." >&2
+      echo "  Its transcript is open and being written; moving it would corrupt it," >&2
+      echo "  and topic cannot stop a session it did not launch." >&2
+      echo "  Exit that session (/exit in its window), then re-run this move." >&2
+      die "refusing to move a live adopted session"
+    fi
+  fi
+
   local was_up=0
   if is_up "$name"; then
     was_up=1
@@ -1406,16 +1423,17 @@ os.replace(tmp,f)' "$tr"
 # --remote-control properly. Verified 2026-08-09: new bridge id, correct name, correct
 # account, conversation intact.
 #
-#   topic rebridge "<name>"|--all [--dry-run]
+#   topic rebridge "<name>"|--all [--down-only] [--dry-run]
 #
 # Editing a transcript is unsupported, so the original is copied to
 # <topic>/backups/ first.
 cmd_rebridge() {
-  local name="" all=0 dry=0
+  local name="" all=0 dry=0 down_only=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --all)     all=1; shift ;;
-      --dry-run) dry=1; shift ;;
+      --all)       all=1; shift ;;
+      --down-only) down_only=1; shift ;;   # leave running sessions undisturbed
+      --dry-run)   dry=1; shift ;;
       *) name="$1"; shift ;;
     esac
   done
@@ -1432,6 +1450,9 @@ cmd_rebridge() {
         echo "  skipping \"$n\" — it is the session running this command"
         continue
       fi
+      # --down-only: a live session would have to be restarted to re-register, and
+      # a down one re-registers for free on its next pickup.
+      if [[ $down_only -eq 1 ]] && is_up "$n"; then continue; fi
       targets+=("$n")
     done
   else
