@@ -59,7 +59,22 @@ set -euo pipefail
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
 TOPICS_ROOT="${CLAUDE_TOPICS_ROOT:-$CLAUDE_DIR/topics}"
-DISPATCHER_NAME="${CLAUDE_DISPATCHER_NAME:-Dispatcher}"
+
+# Short label for the active profile: ~/.claude-v3rv -> "v3rv", default -> "".
+profile_tag() {
+  [[ "$CLAUDE_DIR" == "$HOME/.claude" ]] && { printf ''; return 0; }
+  basename "$CLAUDE_DIR" | sed 's/^\.//; s/^claude-//'
+}
+PROFILE_TAG="$(profile_tag)"
+
+# Each profile runs its own Dispatcher, so their names must differ — otherwise they
+# collide as topic names, as Remote Control names in ListAgents, and in the tmux
+# window list. The default profile keeps the bare "Dispatcher" it already has.
+if [[ -n "$PROFILE_TAG" ]]; then
+  DISPATCHER_NAME="${CLAUDE_DISPATCHER_NAME:-Dispatcher ($PROFILE_TAG)}"
+else
+  DISPATCHER_NAME="${CLAUDE_DISPATCHER_NAME:-Dispatcher}"
+fi
 
 # tmux is machine-global, not per-profile: two profiles each running a topic called
 # "Fantasy Images" would fight over one tmux session, and `topic up` would report the
@@ -69,9 +84,7 @@ DISPATCHER_NAME="${CLAUDE_DISPATCHER_NAME:-Dispatcher}"
 #   ~/.claude        -> ""          "Fantasy Images"
 #   ~/.claude-v3rv   -> "v3rv/"     "v3rv/Fantasy Images"
 TMUX_PREFIX=""
-if [[ "$CLAUDE_DIR" != "$HOME/.claude" ]]; then
-  TMUX_PREFIX="$(basename "$CLAUDE_DIR" | sed 's/^\.//; s/^claude-//')/"
-fi
+[[ -n "$PROFILE_TAG" ]] && TMUX_PREFIX="$PROFILE_TAG/"
 
 # launchd gives us a minimal PATH; make sure the tools we need are findable.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
