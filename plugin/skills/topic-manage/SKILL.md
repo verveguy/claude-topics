@@ -1,6 +1,6 @@
 ---
 name: topic-manage
-description: Pick up, put down, list, and adopt long-running Claude Code topics. Use when the user says "pick up <topic>", "put down <topic>", "set aside", "resume <topic>", "start a session on <topic>", "what topics are up", "adopt this session", or asks to manage sessions remotely from their phone. For handing a topic to a fresh session to clear context, use the `handoff` skill instead.
+description: Pick up, put down, list, adopt, rename, and move long-running Claude Code topics, including across Claude Code profiles. Use when the user says "pick up <topic>", "put down <topic>", "set aside", "resume <topic>", "start a session on <topic>", "what topics are up", "adopt this session", "rename this topic", "move it to my other profile", "which profile is it in", asks why a session shows the wrong name or account in the Claude UI, or asks to manage sessions remotely from their phone. For handing a topic to a fresh session to clear context, use the `handoff` skill instead; for splitting one topic into two, use `fork`.
 ---
 
 # Managing topics
@@ -118,6 +118,33 @@ session has exited.**
 If a topic has grown two subjects, split it: `topic fork` gives one thread its own
 topic, seeded with a brief, while the parent keeps running. The `fork` skill has the
 procedure. `topic whoami` names the topic the current session is sitting in.
+
+## Renaming, and Remote Control names
+
+A topic's name lives in five places: the registry, the tmux session, the peer name in
+`ListAgents`, the name in the Claude UI, and the transcript's title. `topic rename
+"<old>" "<new>"` changes all of them; nothing else does.
+
+- **`/rename` in the Claude UI changes only the cloud name.** If a user reports a
+  session whose UI name does not match anything local, that is why — the topic is
+  still registered under its old name, and that is the name every `topic` command
+  needs.
+- A session's UI name and account are pinned to its Remote Control *bridge*, so a
+  topic moved between profiles keeps the old account and a hostname-derived name until
+  re-minted. `move` and `rename` do that automatically; `topic rebridge "<name>"|--all
+  [--down-only]` fixes one already in place.
+- **Re-minting restarts the cloud conversation.** The local transcript keeps
+  everything and the session resumes with full history, but the Claude UI shows the
+  topic from the re-mint onwards and the old entry is orphaned — listed, renameable,
+  connected to nothing. Tell the user this before doing it in bulk; an orphan showing
+  different content from the live session is exactly how it presents.
+
+## Shutting everything down
+
+`topic down-all` puts every live topic in the current profile down, skipping the
+calling session. `topics-cycle down` / `topics-cycle up` does it across every profile
+and handles the launchd agents, which otherwise restart Dispatchers underneath you.
+Both are lossless and both take `--dry-run`; show the user the dry run first.
 
 ## Removing topics
 

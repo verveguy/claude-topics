@@ -424,6 +424,19 @@ Learned the hard way; don't re-derive them.
   left the pane, but the process can still flush a final `file-history-snapshot`
   record afterwards — which recreates the transcript at its old path after a move.
   Wait for the file to stop changing before relocating it.
+- **Remote Control identity is pinned to a bridge, and the bridge lives in the
+  transcript.** Which NAME a session shows in the Claude UI, and which ACCOUNT it
+  appears under, are fixed when its bridge session is created and recorded as
+  `{"type":"bridge-session",...}`. Claude Code rejoins that bridge on resume, so
+  `--remote-control "<name>"` is ignored for any session that already has one — a
+  topic moved between profiles keeps its old account and hostname-derived name until
+  the bridge is re-minted. That is what `topic rebridge` does, and what `move` and
+  `rename` do for you.
+- **`/rename` in the Claude UI is cloud-only.** It changes the Remote Control display
+  name and nothing else: the transcript's `custom-title`, the session record, the tmux
+  session and the topic registry all keep the old name. Peers then address the session
+  by its new cloud name while every local command still uses the old one. `topic
+  rename` is the way to change all five at once.
 - **A session's name survives its process, inside its own transcript.** Transcripts
   carry `{"type":"custom-title","customTitle":"..."}` records — that is the name
   `claude --resume` lists. A **rename appends another one**, so the *last* record is
