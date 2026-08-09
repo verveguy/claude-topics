@@ -8,6 +8,8 @@
 #   topic up   "<name>" [dir]   Pick up: resume the topic's session, or start one.
 #                               --seed-from <file> starts a NEW topic from a brief.
 #   topic down "<name>"         Put down: terminate the session, stay resumable.
+#   topic down-all              Put every live topic in this profile down. Skips the
+#                               calling session unless --include-self. --dry-run.
 #   topic list                  Show every topic and whether it is up or down.
 #   topic status "<name>"       Detail for one topic.
 #   topic forget "<name>"       Stop tracking a topic (keeps handoff docs; --purge
@@ -944,6 +946,41 @@ cmd_list() {
   [[ $found -eq 1 ]] || echo "  (no topics yet — \`topic up \"<name>\" [dir]\` creates one)"
 }
 
+# Put every live topic in this profile down, losslessly. Used by `topics-cycle` and
+# by hand before logging a profile in and out.
+#
+# The caller's OWN topic is skipped by default: putting it down terminates the
+# session running this command, so the rest of the loop would never execute.
+cmd_down_all() {
+  local include_self=0 dry=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --include-self) include_self=1; shift ;;
+      --dry-run)      dry=1; shift ;;
+      *) die "down-all: unexpected argument: $1" ;;
+    esac
+  done
+
+  local self; self="$(cmd_whoami 2>/dev/null)" || self=""
+  local d name did=0 skipped=""
+  for d in "$TOPICS_ROOT"/*/; do
+    [[ -f "$d/topic.json" ]] || continue
+    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    [[ -n "$name" ]] || continue
+    is_up "$name" || continue
+    if [[ "$name" == "$self" && $include_self -eq 0 ]]; then skipped="$name"; continue; fi
+    did=1
+    if [[ $dry -eq 1 ]]; then echo "  would put down: $name"; else cmd_down "$name"; fi
+  done
+
+  [[ $did -eq 1 ]] || echo "  nothing up in this profile."
+  if [[ -n "$skipped" ]]; then
+    echo ""
+    echo "  Skipped \"$skipped\" — it is the session running this command."
+    echo "  Put it down last, yourself:  topic down \"$skipped\""
+  fi
+}
+
 cmd_ensure_dispatcher() {
   if is_up "$DISPATCHER_NAME"; then
     echo "\"$DISPATCHER_NAME\" is up."
@@ -964,6 +1001,7 @@ case "${1:-}" in
   up)                shift; cmd_up "$@" ;;
   adopt)             shift; cmd_adopt "$@" ;;
   forget)            shift; cmd_forget "$@" ;;
+  down-all)          shift; cmd_down_all "$@" ;;
   prune)             shift; cmd_prune "$@" ;;
   down)              shift; cmd_down "$@" ;;
   list|ls)           shift; cmd_list "$@" ;;

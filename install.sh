@@ -45,6 +45,7 @@ if [[ $UNINSTALL -eq 1 ]]; then
   launchctl unload "$PLIST_DEST" 2>/dev/null || true
   rm -f "$PLIST_DEST"; say "removed $PLIST_DEST"
   [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
+  [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
   echo "Left in place (deliberately — this is your data, not the tool):"
@@ -73,7 +74,8 @@ link() {
 echo "Installing from $REPO"
 say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
-link "$REPO/bin/topic" "$BIN/topic"
+link "$REPO/bin/topic"        "$BIN/topic"
+link "$REPO/bin/topics-cycle" "$BIN/topics-cycle"
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
 # The plist cannot be a symlink to a template — launchd needs the real paths

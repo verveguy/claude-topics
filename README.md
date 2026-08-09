@@ -3,12 +3,13 @@
 Pick up, put down, and hand off long-running Claude Code work — from anywhere,
 including your phone.
 
-Two tools plus a Claude Code plugin:
+Two scripts plus a Claude Code plugin:
 
 | Piece | What it is |
 |-------|------------|
 | `topic` | Manage **topics**: stable names that outlive the session beneath them |
-| `topics` plugin | Skills (`handoff`, `topic-manage`) so Claude knows the procedures |
+| `topics-cycle` | Take every profile's topics down cleanly, and bring them back |
+| `topics` plugin | Skills (`handoff`, `fork`, `topic-manage`) so Claude knows the procedures |
 
 ## The problem this solves
 
@@ -47,6 +48,7 @@ topic list                    # what's up, what's down
 topic status "<name>"         # dir, session UUID, generation, retired sessions
 topic forget "<name>"         # stop tracking it (keeps handoff docs)
 topic prune                   # show topics that are dead; --yes removes them
+topic down-all                # put every live topic in this profile down
 
 topic up "<name>" [dir] --seed-from <file>    # start a NEW topic from a brief
 ```
@@ -183,6 +185,33 @@ Three things make this safe rather than merely possible:
 `topic list` prints the profile whenever it is not the default, so a short list
 cannot be mistaken for missing topics.
 
+### Cycling everything — `topics-cycle`
+
+To log a profile in or out, rotate credentials, or upgrade Claude Code, you want
+everything down and then back. Two commands, because the point is what you do in
+between:
+
+```bash
+topics-cycle down          # unload agents, put every topic in every profile down
+# ...log each profile in from a plain session in ~ , check /status...
+topics-cycle up            # reload agents, start each profile's Dispatcher
+topic up "<name>"          # pick topics back up as you want them
+```
+
+Both take `--dry-run`. `topics-cycle profiles` lists what it will act on — the
+installed Dispatcher plists *are* that list, since each names the profile it manages,
+so there is no second list to keep in sync.
+
+The ordering is the entire reason this exists:
+
+- **Unload the launchd agents first.** They run `ensure-dispatcher` every 5 minutes,
+  so a Dispatcher put down without unloading its agent comes back underneath you —
+  typically in the middle of logging in.
+- **Putting topics down is lossless.** Each keeps its session UUID; `up` is a real
+  `--resume`. Nothing here destroys work, so `down` is safe to run freely.
+- **The calling session is skipped**, since putting it down would kill the script
+  mid-run. It is named at the end so you can take it down last by hand.
+
 ### The Dispatcher
 
 An always-up topic whose only job is running `topic` commands for the others. It
@@ -309,8 +338,10 @@ Learned the hard way; don't re-derive them.
 
 ```
 bin/topic                  topic manager
+bin/topics-cycle           take everything down / bring it back, across profiles
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session
+  skills/fork/             how to split a thread into its own topic
   skills/topic-manage/     pick up / put down / adopt / Dispatcher
 launchd/                   Dispatcher agent template (__HOME__ substituted at install)
 install.sh                 symlink installer
