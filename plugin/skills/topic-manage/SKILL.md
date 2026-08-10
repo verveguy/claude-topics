@@ -12,6 +12,13 @@ without accumulating week-old cluttered context.
 Backed by the `topic` CLI (a Go binary, installed at `~/.local/bin/topic`). Run
 `topic --help` for the full surface; every command below is part of it.
 
+## If `topic` is missing
+
+These procedures are worthless without the CLI. If a `topic` command fails with
+"command not found", run `topic-bootstrap` — it reports what is installed and how to
+get the rest. `topic-bootstrap --install` clones and builds it, which installs a
+binary and a launchd agent, so **ask the user before running it**.
+
 ## Core verbs
 
 ```bash

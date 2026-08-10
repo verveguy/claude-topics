@@ -11,6 +11,13 @@ session, and its own context — seeded with a brief you write.
 
 Invoked as `/fork "<Topic Name>" <what to extract>`.
 
+## If `topic` is missing
+
+These procedures are worthless without the CLI. If a `topic` command fails with
+"command not found", run `topic-bootstrap` — it reports what is installed and how to
+get the rest. `topic-bootstrap --install` clones and builds it, which installs a
+binary and a launchd agent, so **ask the user before running it**.
+
 ## Fork or hand off?
 
 - **Fork** — the topic contains two subjects and both are still live. You want two

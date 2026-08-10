@@ -13,6 +13,13 @@ details survive.
 Backed by the `topic` CLI (`~/.local/bin/topic`). Run `topic --help` for the full
 surface.
 
+## If `topic` is missing
+
+These procedures are worthless without the CLI. If a `topic` command fails with
+"command not found", run `topic-bootstrap` — it reports what is installed and how to
+get the rest. `topic-bootstrap --install` clones and builds it, which installs a
+binary and a launchd agent, so **ask the user before running it**.
+
 ## Scoping: `/handoff <focus>`
 
 The user will often name a focus — `/handoff the openai investigation`, or "hand this

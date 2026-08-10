@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# topic-bootstrap — make the `topic` CLI available for this plugin's skills.
+#
+# The plugin ships the PROCEDURES; the work is done by the `topic` binary, which the
+# plugin cannot ship: it is Go, so it is platform-specific, and committing a build
+# would put megabytes into every clone. Claude Code has no postinstall hook either.
+# So this exists instead — an explicit, idempotent bootstrap the skills can point at
+# when they find no `topic` on PATH.
+#
+#   topic-bootstrap          report what is installed, and what is missing
+#   topic-bootstrap --install  clone (if needed) and build it
+#
+# It is deliberately NOT automatic. Installing a binary and a launchd agent onto
+# someone's machine is their decision, not a side effect of loading a skill.
+set -euo pipefail
+
+REPO_DIR="${CLAUDE_TOPICS_REPO:-$HOME/dev/claude-topics}"
+REPO_URL="https://github.com/verveguy/claude-topics.git"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+report() {
+  if have topic; then
+    echo "topic: $(command -v topic)"
+    echo "  $(topic --help 2>/dev/null | head -1)"
+    return 0
+  fi
+  echo "topic: NOT on PATH — the topics skills cannot do anything without it."
+  echo
+  echo "  Install it:   topic-bootstrap --install"
+  echo "  Or by hand:   git clone $REPO_URL $REPO_DIR"
+  echo "                cd $REPO_DIR && ./install.sh"
+  echo
+  echo "  Requires go, tmux and claude, with ~/.local/bin on your PATH."
+  return 1
+}
+
+install_it() {
+  for tool in git go tmux; do
+    have "$tool" || { echo "topic-bootstrap: $tool is required but not on PATH" >&2; exit 1; }
+  done
+
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    echo "Using the existing checkout at $REPO_DIR"
+  else
+    echo "Cloning $REPO_URL -> $REPO_DIR"
+    mkdir -p "$(dirname "$REPO_DIR")"
+    git clone --quiet "$REPO_URL" "$REPO_DIR"
+  fi
+
+  # install.sh builds the binary, links it, and installs the launchd agent for the
+  # ACTIVE profile — it honours CLAUDE_CONFIG_DIR just as `topic` itself does.
+  ( cd "$REPO_DIR" && ./install.sh )
+
+  echo
+  report
+}
+
+case "${1:-}" in
+  --install) install_it ;;
+  ""|--check) report ;;
+  *) echo "usage: topic-bootstrap [--check|--install]" >&2; exit 2 ;;
+esac

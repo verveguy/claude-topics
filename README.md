@@ -56,9 +56,20 @@ claude plugin marketplace add verveguy/claude-topics
 claude plugin install topics@claude-topics
 ```
 
-The skills drive the `topic` CLI, so they are only useful alongside it — but the
-marketplace is the tidy way to get them into a profile, and `install.sh` remains the
-way to get the binary.
+The skills drive the `topic` CLI, so they are only useful alongside it. The plugin
+cannot ship the binary — it is Go, so platform-specific, and committing a build would
+put megabytes into every clone — and Claude Code has no postinstall hook. What it does
+ship is `plugin/bin/topic-bootstrap`, which lands on the Bash tool's `PATH` while the
+plugin is enabled:
+
+```bash
+topic-bootstrap             # what is installed, and what is missing
+topic-bootstrap --install   # clone and build it
+```
+
+The skills point at it when a `topic` command comes back "command not found". It is
+deliberately not automatic: installing a binary and a launchd agent is the user's
+decision, not a side effect of loading a skill.
 
 ## `topic` — the tool
 
