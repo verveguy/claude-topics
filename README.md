@@ -456,11 +456,38 @@ Learned the hard way; don't re-derive them.
   active`). Claude Code's startup text has changed twice already — suspect this first
   if launches hang for the full timeout.
 
+## Tests
+
+```bash
+go test ./test/                                              # hermetic, seconds
+TOPIC_TEST_PROFILE=~/.claude-personal go test ./test/        # + live sessions
+go test ./test/ -short                                       # hermetic only
+```
+
+The suite drives the **CLI as a black box** — it runs `bin/topic` and asserts on exit
+codes, output and on-disk state. That is deliberate: it tests the contract rather than
+the implementation, so it keeps working as commands are migrated from bash to Go, and
+serves as the specification and acceptance criteria for that migration.
+
+Two tiers:
+
+- **Hermetic** — a sandboxed registry (`CLAUDE_TOPICS_ROOT`) and config dir, no session
+  ever launched. One test per defect found on 2026-08-09, each documenting the bug it
+  locks out.
+- **Live** — really launches Claude Code, because session initialisation (trust
+  prompts, first-run setup, Remote Control bridges) is where the hard-won behaviour
+  lives and cannot be faked. Needs `TOPIC_TEST_PROFILE` pointing at a **real
+  logged-in** profile: credentials are per-profile, so a throwaway config dir is not
+  logged in. The registry stays sandboxed, so live tests cannot touch real topics;
+  they launch with no seed prompt, so nothing is billed, and they clean up after
+  themselves.
+
 ## Layout
 
 ```
 bin/topic                  topic manager
 bin/topics-cycle           take everything down / bring it back, across profiles
+test/                      Go tests driving the CLI as a black box
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session
   skills/fork/             how to split a thread into its own topic
