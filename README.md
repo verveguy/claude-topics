@@ -23,91 +23,6 @@ from your phone while travelling. Two things go wrong:
 `topic` fixes both, by making the unit of work a *topic* rather than a session — the name stays stable while the session underneath is resumed, retired,
 or replaced.
 
-## For a new user
-
-**The whole thing** (CLI, skills, and a Dispatcher kept alive by launchd):
-
-```bash
-git clone https://github.com/verveguy/claude-topics.git ~/dev/claude-topics
-cd ~/dev/claude-topics && ./install.sh
-topic --help
-```
-
-**Just the skills**, to teach Claude the procedures in another profile or on a machine
-where the CLI is already installed:
-
-```bash
-claude plugin marketplace add verveguy/claude-topics
-claude plugin install topics@claude-topics
-```
-
-Installed that way, the plugin also puts `topic-bootstrap` on Claude's `PATH`; running
-`topic-bootstrap --install` does the clone-and-build from step one, so either entry
-point reaches the same place.
-
-### What it assumes
-
-- **macOS**, for the Dispatcher. `topic cycle` and the always-up Dispatcher use
-  launchd (`~/Library/LaunchAgents`, `launchctl`). Everything else — up, down, fork,
-  handoff, move, rename, adopt — is tmux and Claude Code only, so it would work on
-  Linux with a systemd-user equivalent, which nobody has written.
-- `tmux`, `claude`, `go`, `git`, and `~/.local/bin` on your `PATH`.
-- A Claude Code profile that has completed first-run setup. `topic` refuses to
-  automate one that has not, rather than hanging on the prompt — see Profiles.
-
-Nothing is machine-specific beyond that: the launchd label
-(`io.github.verveguy.claude-dispatcher`) is a reverse-DNS namespace anchored to the
-repo's GitHub account, and every path is derived from `$HOME` and `CLAUDE_CONFIG_DIR`
-at install time.
-
-## Install
-
-```bash
-git clone <this repo> ~/dev/claude-topics
-cd ~/dev/claude-topics
-./install.sh
-```
-
-`install.sh` builds `bin/topic` and symlinks it, the plugin and a launchd agent into
-place — the plugin as a **symlink back into the repo**, so editing a skill takes
-effect immediately. Re-run it after changing anything under `cmd/`. Requires `tmux`,
-`claude`, `go`, and `~/.local/bin` on your `PATH`.
-
-To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
-
-```bash
-CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
-```
-
-`./install.sh --uninstall` removes the links and the launchd agent. It deliberately
-leaves `<profile>/topics/` alone — that's your registry, handoff docs and briefs, not
-the tool.
-
-### The plugin on its own
-
-The skills are also published as a plugin marketplace in this repo, so Claude can be
-taught the procedures without installing the CLI from source:
-
-```bash
-claude plugin marketplace add verveguy/claude-topics
-claude plugin install topics@claude-topics
-```
-
-The skills drive the `topic` CLI, so they are only useful alongside it. The plugin
-cannot ship the binary — it is Go, so platform-specific, and committing a build would
-put megabytes into every clone — and Claude Code has no postinstall hook. What it does
-ship is `plugin/bin/topic-bootstrap`, which lands on the Bash tool's `PATH` while the
-plugin is enabled:
-
-```bash
-topic-bootstrap             # what is installed, and what is missing
-topic-bootstrap --install   # clone and build it
-```
-
-The skills point at it when a `topic` command comes back "command not found". It is
-deliberately not automatic: installing a binary and a launchd agent is the user's
-decision, not a side effect of loading a skill.
-
 ## `topic` — the tool
 
 ```bash
@@ -456,6 +371,70 @@ it refuses outright while that process is alive (`--claim` will not override it)
 needs no assertion once it's gone. The probe and `--session-id` paths have no pid to
 check, so they still fail closed until you assert the original has exited with
 `--claim`.
+
+## Getting it
+
+```bash
+git clone https://github.com/verveguy/claude-topics.git ~/dev/claude-topics
+cd ~/dev/claude-topics && ./install.sh
+topic --help
+```
+
+`install.sh` builds `bin/topic` and links it, the plugin and a launchd agent into
+place — the plugin as a **symlink back into the repo**, so editing a skill takes
+effect immediately. Re-run it after changing anything under `cmd/`.
+
+To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
+```
+
+`./install.sh --uninstall` removes the links and the launchd agent. It deliberately
+leaves `<profile>/topics/` alone — that's your registry, handoff docs and briefs, not
+the tool.
+
+### What it assumes
+
+- **macOS**, for the Dispatcher. `topic cycle` and the always-up Dispatcher use
+  launchd (`~/Library/LaunchAgents`, `launchctl`). Everything else — up, down, fork,
+  handoff, move, rename, adopt — is tmux and Claude Code only, so it would work on
+  Linux with a systemd-user equivalent, which nobody has written.
+- `tmux`, `claude`, `go`, `git`, and `~/.local/bin` on your `PATH`.
+- A Claude Code profile that has completed first-run setup. `topic` refuses to
+  automate one that has not, rather than hanging on the prompt — see Profiles.
+
+Nothing else is machine-specific: the launchd label
+(`io.github.verveguy.claude-dispatcher`) is a reverse-DNS namespace anchored to the
+repo's GitHub account, and every path derives from `$HOME` and `CLAUDE_CONFIG_DIR` at
+install time.
+
+### Just the skills
+
+The skills are also published as a plugin marketplace in this repo, so Claude can be
+taught the procedures in another profile, or on a machine where the CLI already
+exists:
+
+```bash
+claude plugin marketplace add verveguy/claude-topics
+claude plugin install topics@claude-topics
+```
+
+They drive the `topic` CLI, so they are only useful alongside it. The plugin cannot
+ship the binary — it is Go, so platform-specific, and committing a build would put
+megabytes into every clone — and Claude Code has no postinstall hook. What it does
+ship is `plugin/bin/topic-bootstrap`, which lands on the Bash tool's `PATH` while the
+plugin is enabled:
+
+```bash
+topic-bootstrap             # what is installed, and what is missing
+topic-bootstrap --install   # clone and build it, as above
+```
+
+The skills point at it when a `topic` command comes back "command not found". It is
+deliberately not automatic: installing a binary and a launchd agent is the user's
+decision, not a side effect of loading a skill.
+
 
 ## Non-obvious mechanics
 
