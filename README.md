@@ -23,6 +23,46 @@ from your phone while travelling. Two things go wrong:
 `topic` fixes both, by making the unit of work a *topic* rather than a session — the name stays stable while the session underneath is resumed, retired,
 or replaced.
 
+## For a new user
+
+The repo is **private**, so the first step is access — everything below needs it,
+including the marketplace, which Claude Code fetches over your git credentials.
+
+**The whole thing** (CLI, skills, and a Dispatcher kept alive by launchd):
+
+```bash
+gh repo clone verveguy/claude-topics ~/dev/claude-topics
+cd ~/dev/claude-topics && ./install.sh
+topic --help
+```
+
+**Just the skills**, to teach Claude the procedures in another profile or on a machine
+where the CLI is already installed:
+
+```bash
+claude plugin marketplace add verveguy/claude-topics
+claude plugin install topics@claude-topics
+```
+
+Installed that way, the plugin also puts `topic-bootstrap` on Claude's `PATH`; running
+`topic-bootstrap --install` does the clone-and-build from step one, so either entry
+point reaches the same place.
+
+### What it assumes
+
+- **macOS**, for the Dispatcher. `topic cycle` and the always-up Dispatcher use
+  launchd (`~/Library/LaunchAgents`, `launchctl`). Everything else — up, down, fork,
+  handoff, move, rename, adopt — is tmux and Claude Code only, so it would work on
+  Linux with a systemd-user equivalent, which nobody has written.
+- `tmux`, `claude`, `go`, `git`, and `~/.local/bin` on your `PATH`.
+- A Claude Code profile that has completed first-run setup. `topic` refuses to
+  automate one that has not, rather than hanging on the prompt — see Profiles.
+
+Nothing is machine-specific beyond that: the launchd label carries the author's name
+(`com.verveguy.claude-dispatcher`), which is a reverse-DNS convention rather than
+anything meaningful, and every path is derived from `$HOME` and `CLAUDE_CONFIG_DIR` at
+install time.
+
 ## Install
 
 ```bash
