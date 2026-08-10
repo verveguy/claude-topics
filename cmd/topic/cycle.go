@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -29,7 +30,16 @@ type launchAgent struct {
 
 func launchAgents() []launchAgent {
 	home, _ := os.UserHomeDir()
-	paths, _ := filepath.Glob(filepath.Join(home, "Library", "LaunchAgents", "com.verveguy.claude-dispatcher*.plist"))
+	// Both labels: io.github.* is current, com.verveguy.* is what installs made before
+	// the namespace was anchored to a domain that exists. Missing an agent here would
+	// mean `cycle down` leaves it supervising, which is the exact failure this command
+	// exists to prevent.
+	var paths []string
+	for _, pat := range []string{"io.github.verveguy.claude-dispatcher*.plist", "com.verveguy.claude-dispatcher*.plist"} {
+		found, _ := filepath.Glob(filepath.Join(home, "Library", "LaunchAgents", pat))
+		paths = append(paths, found...)
+	}
+	sort.Strings(paths)
 	var out []launchAgent
 	for _, p := range paths {
 		dir := plistConfigDir(p)

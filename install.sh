@@ -25,8 +25,10 @@ PROFILE_SUFFIX=""
 if [[ "$CLAUDE_DIR" != "$HOME/.claude" ]]; then
   PROFILE_SUFFIX="-$(basename "$CLAUDE_DIR" | sed 's/^\.//; s/^claude-//')"
 fi
-PLIST_LABEL="com.verveguy.claude-dispatcher$PROFILE_SUFFIX"
+PLIST_LABEL="io.github.verveguy.claude-dispatcher$PROFILE_SUFFIX"
 PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+# Agents installed before the label was anchored to a domain that actually exists.
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.verveguy.claude-dispatcher$PROFILE_SUFFIX.plist"
 LOG_PATH="$HOME/Library/Logs/claude-dispatcher$PROFILE_SUFFIX.log"
 
 FORCE=0; UNINSTALL=0
@@ -42,8 +44,11 @@ say() { printf '  %s\n' "$*"; }
 
 if [[ $UNINSTALL -eq 1 ]]; then
   echo "Uninstalling…"
-  launchctl unload "$PLIST_DEST" 2>/dev/null || true
-  rm -f "$PLIST_DEST"; say "removed $PLIST_DEST"
+  for p in "$PLIST_DEST" "$LEGACY_PLIST"; do
+    [[ -f "$p" ]] || continue
+    launchctl unload "$p" 2>/dev/null || true
+    rm -f "$p"; say "removed $p"
+  done
   [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
@@ -95,7 +100,7 @@ sed -e "s|__HOME__|$HOME|g" \
     -e "s|__LABEL__|$PLIST_LABEL|g" \
     -e "s|__CONFIG_DIR__|$CLAUDE_DIR|g" \
     -e "s|__LOG__|$LOG_PATH|g" \
-  "$REPO/launchd/com.verveguy.claude-dispatcher.plist.template" > "$PLIST_DEST"
+  "$REPO/launchd/io.github.verveguy.claude-dispatcher.plist.template" > "$PLIST_DEST"
 
 # The default profile must run with CLAUDE_CONFIG_DIR *unset*, not set to ~/.claude:
 # the two select different config files and only the unset one has completed
@@ -112,6 +117,14 @@ plistlib.dump(d, open(f, "wb"))' "$PLIST_DEST"
   say "default profile: CLAUDE_CONFIG_DIR deliberately left unset in the agent"
 fi
 say "rendered $PLIST_DEST"
+
+# Retire the old-label agent BEFORE loading the new one, or two agents would both be
+# supervising the same Dispatcher.
+if [[ -f "$LEGACY_PLIST" ]]; then
+  launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+  rm -f "$LEGACY_PLIST"
+  say "retired the old agent: $(basename "$LEGACY_PLIST")"
+fi
 
 launchctl unload "$PLIST_DEST" 2>/dev/null || true
 launchctl load -w "$PLIST_DEST"

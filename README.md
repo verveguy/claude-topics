@@ -58,10 +58,12 @@ point reaches the same place.
 - A Claude Code profile that has completed first-run setup. `topic` refuses to
   automate one that has not, rather than hanging on the prompt — see Profiles.
 
-Nothing is machine-specific beyond that: the launchd label carries the author's name
-(`com.verveguy.claude-dispatcher`), which is a reverse-DNS convention rather than
-anything meaningful, and every path is derived from `$HOME` and `CLAUDE_CONFIG_DIR` at
-install time.
+Nothing is machine-specific beyond that: the launchd label
+(`io.github.verveguy.claude-dispatcher`) is a reverse-DNS namespace anchored to the
+repo's GitHub account, and every path is derived from `$HOME` and `CLAUDE_CONFIG_DIR`
+at install time. `install.sh` retires agents installed under the older
+`com.verveguy.*` label, and `topic cycle` finds both, so an upgrade cannot leave one
+supervising unseen.
 
 ## Install
 
