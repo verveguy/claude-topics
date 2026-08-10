@@ -491,30 +491,32 @@ unload launchd agents, so a test run would stop the real Dispatchers.
 
 ## Implementation
 
-Orchestration is bash — driving `tmux`, `claude` and `launchctl` is what shell is
-genuinely good at, and a symlinked script can be fixed from a phone without a build
-step, which matters for a tool whose point is working remotely.
+`topic` is a single Go binary (`cmd/topic`). It began as ~1,750 lines of bash with 23
+inline `python3 -c` blocks, and was migrated command by command behind the CLI
+contract the test suite pins down — the tests never changed, which is what made each
+step safe to take and easy to verify.
 
-The Go core is `cmd/topic-core`, and commands migrate into it one at a time behind
-the CLI contract the test suite pins down. Migrated so far: the JSON layer, and the
-read-only commands (`list`, `status`, `profiles`).
+Two of this project's bugs came from bash itself: `pipefail` swallowing a failure so
+`forget` silently did nothing, and `die`/`exit` inside `$( )` aborting a script with
+no output at all. Those classes are gone. The transcript-title search also became
+**~14× faster** (5s → 0.35s over 800MB) by scanning candidates in parallel instead of
+shelling out per file.
 
-The JSON layer went first. It was 23 inline `python3 -c` blocks:
-code embedded in shell strings, untestable on its own and one stray quote away from a
-runtime bug — two of this project's bugs came from exactly that. `bin/topic` calls it
-as `registry <subcommand>`; there is no Python dependency left.
+What shell was good at — driving `tmux`, `claude` and `launchctl` — is now `os/exec`,
+which turned out to be no worse. The startup-prompt heuristics that key on Claude
+Code's on-screen text live in one place, `startupPatterns` in `session.go`: they have
+changed several times and are the first thing to suspect when a launch misbehaves.
 
-Moving the transcript-title search there also made it **~14× faster** (5s → 0.35s over
-800MB), since it scans candidates in parallel rather than shelling out to grep and
-Python per file. Commands migrate one at a time behind the CLI contract the test suite
-pins down.
+A build step is the cost. It is affordable because a broken binary cannot strand you:
+tmux sessions outlive the tool entirely, so `ssh home -t tmux attach -t "<topic>"`
+still reaches every running session, and `go build -o` leaves the previous working
+binary in place if compilation fails.
 
 ## Layout
 
 ```
-bin/topic                  topic manager (orchestration: tmux, claude, launchd)
+cmd/topic/                 the tool itself, in Go (built to bin/topic)
 bin/topics-cycle           take everything down / bring it back, across profiles
-cmd/topic-core/            the Go core — JSON layer, list/status/profiles
 test/                      Go tests driving the CLI as a black box
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session

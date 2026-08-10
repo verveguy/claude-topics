@@ -1,4 +1,4 @@
-// topic-core is the JSON layer behind `topic`.
+// The JSON layer: registry entries, profile configs and transcripts.
 //
 // It exists because that layer was 23 inline `python3 -c` blocks: code embedded in
 // shell strings, where a stray quote is a runtime bug and nothing is testable on its
@@ -25,92 +25,6 @@ import (
 	"syscall"
 	"time"
 )
-
-func main() {
-	if len(os.Args) < 2 {
-		fail("usage: topic-core <command> [args...]")
-	}
-	args := os.Args[2:]
-	var err error
-	switch os.Args[1] {
-	case "get":
-		err = cmdGet(args)
-	case "set":
-		err = cmdSet(args)
-	case "push-history":
-		err = cmdPushHistory(args)
-	case "push-fork":
-		err = cmdPushFork(args)
-	case "relink":
-		err = cmdRelink(args)
-	case "status":
-		err = cmdStatus(args)
-	case "list-topics":
-		err = cmdList(args)
-	case "show":
-		err = cmdStatusCmd(args)
-	case "profiles":
-		err = cmdProfiles(args)
-	case "forget":
-		err = cmdForget(args)
-	case "prune":
-		err = cmdPrune(args)
-	case "rebridge":
-		err = cmdRebridge(args)
-	case "up":
-		err = cmdUp(args)
-	case "down":
-		err = cmdDown(args)
-	case "down-all":
-		err = cmdDownAll(args)
-	case "whoami":
-		err = cmdWhoami(args)
-	case "path":
-		err = cmdPath(args)
-	case "ensure-dispatcher":
-		err = cmdEnsureDispatcher(args)
-	case "fork":
-		err = cmdFork(args)
-	case "handoff-swap":
-		err = cmdHandoffSwap(args)
-	case "session-ids":
-		err = cmdSessionIDs(args)
-	case "project-flag":
-		err = cmdProjectFlag(args)
-	case "onboarded":
-		err = cmdOnboarded(args)
-	case "carry-approvals":
-		err = cmdCarryApprovals(args)
-	case "sessions":
-		err = cmdSessions(args)
-	case "transcript-cwd":
-		err = cmdTranscriptCwd(args)
-	case "transcript-title":
-		err = cmdTranscriptTitle(args)
-	case "strip-bridge":
-		err = cmdStripBridge(args)
-	case "find-titled":
-		err = cmdFindTitled(args)
-	case "append-title":
-		err = cmdAppendTitle(args)
-	default:
-		fail("unknown command: %s", os.Args[1])
-	}
-	if err != nil {
-		fail("%v", err)
-	}
-}
-
-func fail(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "topic-core: "+format+"\n", a...)
-	os.Exit(1)
-}
-
-func need(args []string, n int, usage string) {
-	if len(args) < n {
-		fail("usage: topic-core %s", usage)
-	}
-}
 
 // ---------------------------------------------------------------- JSON documents
 
@@ -493,13 +407,27 @@ func cmdStripBridge(args []string) error {
 // every `topic adopt`.
 func cmdFindTitled(args []string) error {
 	need(args, 2, "find-titled <config-dir> <title>")
-	dir, want := args[0], args[1]
+	for _, r := range findTitled(args[0], args[1]) {
+		fmt.Printf("%s\t%s\t%s\n", r.uuid, r.cwd, r.mod)
+	}
+	return nil
+}
+
+type titledRow struct{ uuid, cwd, mod string }
+
+// findTitled locates resumable sessions by the name `claude --resume` shows, which is
+// the LAST custom-title in a transcript. Newest first.
+//
+// It scans every transcript in the profile, so candidates are filtered in parallel:
+// the corpus is routinely hundreds of megabytes and this is on the path of every
+// `topic adopt`.
+func findTitled(dir, want string) []titledRow {
 	paths, _ := filepath.Glob(filepath.Join(dir, "projects", "*", "*.jsonl"))
 	needle := []byte(`"customTitle":"` + want + `"`)
 
 	type row struct {
-		uuid, cwd string
-		mod       time.Time
+		titledRow
+		mod time.Time
 	}
 	results := make(chan row, len(paths))
 	sem := make(chan struct{}, 8)
@@ -514,8 +442,8 @@ func cmdFindTitled(args []string) error {
 			if err != nil || !bytes.Contains(b, needle) {
 				return
 			}
-			// Contains the name somewhere, but a rename appends: only the LAST
-			// title counts, or a session renamed away would still match.
+			// Contains the name somewhere, but a rename appends: only the LAST title
+			// counts, or a session renamed away would still match.
 			cwd, title := scanTranscript(p)
 			if title != want {
 				return
@@ -524,7 +452,8 @@ func cmdFindTitled(args []string) error {
 			if err != nil {
 				return
 			}
-			results <- row{strings.TrimSuffix(filepath.Base(p), ".jsonl"), cwd, st.ModTime()}
+			results <- row{titledRow{strings.TrimSuffix(filepath.Base(p), ".jsonl"), cwd,
+				st.ModTime().Format("2006-01-02 15:04")}, st.ModTime()}
 		}(p)
 	}
 	wg.Wait()
@@ -535,10 +464,11 @@ func cmdFindTitled(args []string) error {
 		rows = append(rows, r)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].mod.After(rows[j].mod) })
+	out := make([]titledRow, 0, len(rows))
 	for _, r := range rows {
-		fmt.Printf("%s\t%s\t%s\n", r.uuid, r.cwd, r.mod.Format("2006-01-02 15:04"))
+		out = append(out, r.titledRow)
 	}
-	return nil
+	return out
 }
 
 // appendTitle re-titles a transcript. A rename appends rather than rewrites, so the

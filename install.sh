@@ -46,7 +46,6 @@ if [[ $UNINSTALL -eq 1 ]]; then
   rm -f "$PLIST_DEST"; say "removed $PLIST_DEST"
   [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
-  [[ -L "$BIN/topic-core" ]] && { rm -f "$BIN/topic-core"; say "removed $BIN/topic-core"; }
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
   echo "Left in place (deliberately — this is your data, not the tool):"
@@ -74,17 +73,17 @@ link() {
 
 # The JSON layer is a Go helper; build it before linking anything that needs it.
 if command -v go >/dev/null; then
-  (cd "$REPO" && go build -o bin/topic-core ./cmd/topic-core) \
-    && say "built bin/topic-core"
+  (cd "$REPO" && go build -o bin/topic ./cmd/topic) \
+    && say "built bin/topic"
 else
-  echo "go not found on PATH — needed to build bin/topic-core" >&2; exit 1
+  echo "go not found on PATH — needed to build bin/topic" >&2; exit 1
 fi
 
 echo "Installing from $REPO"
 say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
 link "$REPO/bin/topic"          "$BIN/topic"
-link "$REPO/bin/topic-core" "$BIN/topic-core"
+
 link "$REPO/bin/topics-cycle" "$BIN/topics-cycle"
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
