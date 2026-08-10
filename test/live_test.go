@@ -55,21 +55,57 @@ func uniqueName(t *testing.T) string {
 	return fmt.Sprintf("ZZ Test %d %s", os.Getpid(), strings.NewReplacer("/", "-").Replace(t.Name()))
 }
 
-// tearDown stops the session and removes the transcript the test created.
+// tearDown stops the session and removes EVERY transcript the test created — the
+// current session and any retired in history. handoff-swap retires one and starts
+// another, so removing only the current id orphaned a transcript per run.
 func (e *env) tearDown(name, workDir string) {
 	e.t.Helper()
 	e.run("down", name)
-	sid, _ := e.readTopicField(name, "sessionId")
+	ids := e.sessionIDs(name)
+	// An exiting session keeps writing briefly: it flushes a final record AFTER
+	// `down` returns, which recreates the file we just deleted. Sweep twice.
+	e.removeTranscripts(ids)
 	e.run("forget", name, "--purge")
-	if sid != "" {
+	// Keep sweeping briefly: the flush lands at an unpredictable moment after exit,
+	// and a single delayed removal was still leaving 236-byte stubs behind.
+	for range 10 {
+		time.Sleep(500 * time.Millisecond)
+		e.removeTranscripts(ids)
+	}
+	// Belt and braces: a half-started session leaves a tmux session behind.
+	exec.Command("tmux", "kill-session", "-t", "="+tmuxName(e, name)).Run()
+	os.RemoveAll(workDir)
+}
+
+func (e *env) removeTranscripts(ids []string) {
+	for _, sid := range ids {
+		if sid == "" {
+			continue
+		}
 		matches, _ := filepath.Glob(filepath.Join(e.configDir, "projects", "*", sid+".jsonl"))
 		for _, m := range matches {
 			os.Remove(m)
 		}
 	}
-	// Belt and braces: a half-started session leaves a tmux session behind.
-	exec.Command("tmux", "kill-session", "-t", "="+tmuxName(e, name)).Run()
-	os.RemoveAll(workDir)
+}
+
+// sessionIDs reads the registry directly: the current session plus every retired one.
+func (e *env) sessionIDs(name string) []string {
+	var reg struct {
+		SessionID string `json:"sessionId"`
+		History   []struct {
+			SessionID string `json:"sessionId"`
+		} `json:"history"`
+	}
+	b, err := os.ReadFile(filepath.Join(e.topicsRoot, slug(name), "topic.json"))
+	if err != nil || json.Unmarshal(b, &reg) != nil {
+		return nil
+	}
+	ids := []string{reg.SessionID}
+	for _, h := range reg.History {
+		ids = append(ids, h.SessionID)
+	}
+	return ids
 }
 
 func (e *env) readTopicField(name, field string) (string, bool) {
