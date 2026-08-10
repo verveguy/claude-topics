@@ -58,9 +58,7 @@ point reaches the same place.
 Nothing is machine-specific beyond that: the launchd label
 (`io.github.verveguy.claude-dispatcher`) is a reverse-DNS namespace anchored to the
 repo's GitHub account, and every path is derived from `$HOME` and `CLAUDE_CONFIG_DIR`
-at install time. `install.sh` retires agents installed under the older
-`com.verveguy.*` label, and `topic cycle` finds both, so an upgrade cannot leave one
-supervising unseen.
+at install time.
 
 ## Install
 
