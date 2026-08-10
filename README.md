@@ -33,8 +33,9 @@ cd ~/dev/claude-topics
 ```
 
 Everything installs as a **symlink back into the repo**, so editing a script here
-takes effect immediately. Requires `tmux`, `claude`, `python3`, and `~/.local/bin`
-on your `PATH`.
+takes effect immediately. Requires `tmux`, `claude`, `go`, and `~/.local/bin` on your
+`PATH`. `install.sh` builds `bin/topic-registry` before linking; re-run it after
+changing anything under `cmd/`.
 
 `./install.sh --uninstall` removes the links and the launchd agent. It deliberately
 leaves `~/.claude/topics/` alone — that's your registry and handoff docs, not the tool.
@@ -488,11 +489,28 @@ Dispatcher on the developer's own machine) and every flag that changes behaviour
 rather than wording. `topics-cycle`'s `down`/`up` are deliberately untested: they
 unload launchd agents, so a test run would stop the real Dispatchers.
 
+## Implementation
+
+Orchestration is bash — driving `tmux`, `claude` and `launchctl` is what shell is
+genuinely good at, and a symlinked script can be fixed from a phone without a build
+step, which matters for a tool whose point is working remotely.
+
+The JSON layer is Go (`cmd/topic-registry`). It was 23 inline `python3 -c` blocks:
+code embedded in shell strings, untestable on its own and one stray quote away from a
+runtime bug — two of this project's bugs came from exactly that. `bin/topic` calls it
+as `registry <subcommand>`; there is no Python dependency left.
+
+Moving the transcript-title search there also made it **~14× faster** (5s → 0.35s over
+800MB), since it scans candidates in parallel rather than shelling out to grep and
+Python per file. Commands migrate one at a time behind the CLI contract the test suite
+pins down.
+
 ## Layout
 
 ```
-bin/topic                  topic manager
+bin/topic                  topic manager (orchestration: tmux, claude, launchd)
 bin/topics-cycle           take everything down / bring it back, across profiles
+cmd/topic-registry/        the JSON layer, in Go — registry, configs, transcripts
 test/                      Go tests driving the CLI as a black box
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session

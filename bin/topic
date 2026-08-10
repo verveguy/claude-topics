@@ -136,9 +136,17 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 
 die() { echo "topic: $*" >&2; exit 1; }
 
+# The JSON layer lives in a Go helper (cmd/topic-registry). It was 23 inline
+# `python3 -c` blocks: code embedded in shell strings, untestable on its own and one
+# stray quote away from a runtime bug. Prefer a build sitting next to this script so
+# the repo is self-contained; fall back to PATH for an installed copy.
+REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/topic-registry"
+[[ -x "$REGISTRY" ]] || REGISTRY="$(command -v topic-registry 2>/dev/null || true)"
+[[ -n "$REGISTRY" && -x "$REGISTRY" ]] || die "topic-registry not found — run: (cd ~/dev/claude-topics && go build -o bin/topic-registry ./cmd/topic-registry)"
+registry() { "$REGISTRY" "$@"; }
+
 command -v tmux   >/dev/null || die "tmux not found on PATH"
 command -v claude >/dev/null || die "claude not found on PATH"
-command -v python3 >/dev/null || die "python3 not found on PATH"
 
 # ---------------------------------------------------------------- names & paths
 
@@ -165,65 +173,30 @@ topic_json() { printf '%s/topic.json' "$(topic_dir "$1")"; }
 reg_read() {  # reg_read <name> <key> -> value or ""
   local f; f="$(topic_json "$1")"
   [[ -f "$f" ]] || { printf ''; return 0; }
-  python3 -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: d={}
-v=d.get(sys.argv[2],"")
-print(v if v is not None else "")' "$f" "$2"
+  registry get "$f" "$2"
 }
 
 reg_read_at() {  # reg_read_at <topic.json path> <key> -> value or ""
   [[ -f "$1" ]] || { printf ''; return 0; }
-  python3 -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: d={}
-v=d.get(sys.argv[2],"")
-print(v if v is not None else "")' "$1" "$2"
+  registry get "$1" "$2"
 }
 
 reg_write() {  # reg_write <name> <k> <v> [<k> <v> ...]
   local name="$1"; shift
   local f; f="$(topic_json "$name")"
   mkdir -p "$(dirname "$f")"
-  python3 -c '
-import json,os,sys
-f=sys.argv[1]
-try: d=json.load(open(f))
-except Exception: d={}
-kv=sys.argv[2:]
-for i in range(0,len(kv),2): d[kv[i]]=kv[i+1]
-tmp=f+".tmp"
-json.dump(d,open(tmp,"w"),indent=2)
-os.replace(tmp,f)' "$f" "$@"
+  registry set "$f" "$@"
 }
 
 reg_push_history() {  # reg_push_history <name> <sessionId> <handoffDoc>
   local f; f="$(topic_json "$1")"
-  python3 -c '
-import json,os,sys,datetime
-f,sid,doc=sys.argv[1],sys.argv[2],sys.argv[3]
-try: d=json.load(open(f))
-except Exception: d={}
-d.setdefault("history",[]).append({
-  "sessionId": sid, "handoffDoc": doc,
-  "retiredAt": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-})
-tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' "$f" "$2" "$3"
+  registry push-history "$f" "$2" "$3"
 }
 
 reg_push_fork() {  # reg_push_fork <parent> <child>
   local f; f="$(topic_json "$1")"
   [[ -f "$f" ]] || return 0          # parent not registered: nothing to record on
-  python3 -c '
-import json,os,sys
-f,child=sys.argv[1],sys.argv[2]
-try: d=json.load(open(f))
-except Exception: d={}
-forks=d.setdefault("forks",[])
-if child not in forks: forks.append(child)
-tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' "$f" "$2"
+  registry push-fork "$f" "$2"
 }
 
 now_iso() { date +%Y-%m-%dT%H:%M:%S%z; }
@@ -242,13 +215,7 @@ config_file_of() {
 # These approvals are recorded per profile and do NOT travel with a moved topic.
 project_flag() {  # project_flag <config-file> <work-dir> <key>
   [[ -f "$1" ]] || { printf ''; return 0; }
-  python3 -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: print(""); sys.exit(0)
-p=(d.get("projects") or {}).get(sys.argv[2]) or {}
-v=p.get(sys.argv[3], "")
-print("" if v is None else v)' "$1" "$2" "$3"
+  registry project-flag "$1" "$2" "$3"
 }
 
 # Has this profile finished first-run setup? A profile that has not will open on the
@@ -256,11 +223,7 @@ print("" if v is None else v)' "$1" "$2" "$3"
 profile_onboarded() {
   local f; f="$(config_file_of "$1")"
   [[ -f "$f" ]] || return 1
-  python3 -c '
-import json,sys
-try: d=json.load(open(sys.argv[1]))
-except Exception: sys.exit(1)
-sys.exit(0 if d.get("hasCompletedOnboarding") else 1)' "$f"
+  registry onboarded "$f"
 }
 
 # Wait until a file stops changing (size + mtime steady twice in a row), up to ~5s.
@@ -546,7 +509,7 @@ cmd_whoami() {
   local d name
   for d in "$TOPICS_ROOT"/*/; do
     [[ -f "$d/topic.json" ]] || continue
-    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    name="$(registry get "$d/topic.json" name)"
     [[ -n "$name" ]] || continue
     if [[ "$(tmux_name "$name")" == "$s" ]]; then printf '%s\n' "$name"; return 0; fi
   done
@@ -728,13 +691,7 @@ transcript_of() {
 # de-mangling the project slug, which is ambiguous for any hyphenated directory.
 cwd_of() {
   [[ -f "${1:-}" ]] || { printf ''; return 0; }
-  python3 -c '
-import json, sys
-for line in open(sys.argv[1]):
-    if "\"cwd\"" not in line: continue
-    try: c = json.loads(line).get("cwd")
-    except Exception: continue
-    if c: print(c); break' "$1"
+  registry transcript-cwd "$1"
 }
 
 # Remove topics that are truly dead — down, and with no transcript left to resume.
@@ -755,7 +712,7 @@ cmd_prune() {
   local dead=() d name sid
   for d in "$TOPICS_ROOT"/*/; do
     [[ -f "$d/topic.json" ]] || continue
-    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    name="$(registry get "$d/topic.json" name)"
     [[ -n "$name" ]] || continue
     is_up "$name" && continue
     sid="$(reg_read "$name" sessionId)"
@@ -794,16 +751,7 @@ cmd_prune() {
 #
 # Emits one TSV line per live session: pid \t sessionId \t cwd \t name
 live_sessions() {
-  python3 -c '
-import glob, json, os, sys
-for f in sorted(glob.glob(os.path.join(sys.argv[1], "sessions", "*.json"))):
-    try: d = json.load(open(f))
-    except Exception: continue
-    pid, sid = d.get("pid"), d.get("sessionId")
-    if not pid or not sid: continue
-    try: os.kill(int(pid), 0)          # stale record from an exited session
-    except OSError: continue
-    print("\t".join(str(x) for x in (pid, sid, d.get("cwd",""), d.get("name",""))))' "$CLAUDE_DIR"
+  registry sessions "$CLAUDE_DIR"
 }
 
 # A session that has EXITED still carries its name: the transcript holds
@@ -815,27 +763,7 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], "sessions", "*.json"))):
 #
 # Emits, newest first: uuid \t cwd \t last-modified
 sessions_by_title() {
-  local want="$1"
-  # grep narrows to plausible files first; a 25MB transcript is cheap to scan but
-  # there are many of them.
-  local f last cwd
-  # Two greps per candidate beat scanning multi-megabyte transcripts line by line
-  # in Python — this runs on every `topic adopt`.
-  while IFS= read -r f; do
-    [[ -n "$f" ]] || continue
-    last="$(grep -F '"type":"custom-title"' "$f" 2>/dev/null | tail -1 || true)"
-    [[ -n "$last" ]] || continue
-    python3 -c '
-import json, os, sys, time
-f, want, last = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    if json.loads(last).get("customTitle") != want: sys.exit(0)   # renamed away
-except Exception: sys.exit(0)
-print("\t".join((os.path.basename(f)[:-6], sys.argv[4],
-                 time.strftime("%Y-%m-%d %H:%M", time.localtime(os.stat(f).st_mtime)))))' \
-      "$f" "$want" "$last" "$(cwd_of "$f")"
-  done < <(grep -rl --include='*.jsonl' -F "\"customTitle\":\"$want\"" "$CLAUDE_DIR/projects" 2>/dev/null || true) \
-    | sort -t'	' -k3,3r
+  registry find-titled "$CLAUDE_DIR" "$1"
 }
 
 # Adopt a session that has EXITED but is still resumable — the ones `claude --resume`
@@ -1084,16 +1012,7 @@ cmd_status() {
   [[ -f "$f" ]] || die "no such topic: \"$name\""
   local state; if is_up "$name"; then state="UP"; else state="down"; fi
   echo "$name  [$state]"
-  python3 -c '
-import json,sys
-d=json.load(open(sys.argv[1]))
-for k in ("dir","sessionId","generation","forkedFrom","seededFrom","movedFrom",
-          "movedAt","lastPickedUp","lastPutDown","lastHandoff"):
-    if d.get(k): print(f"  {k}: {d[k]}")
-forks=d.get("forks") or []
-if forks: print("  forks: " + ", ".join(forks))
-h=d.get("history") or []
-if h: print(f"  retired sessions: {len(h)}")' "$f"
+  registry status "$f"
 }
 
 cmd_list() {
@@ -1107,7 +1026,7 @@ cmd_list() {
       tag="$(profile_tag_of "$p")"
       for d in "$root"/*/; do
         [[ -f "$d/topic.json" ]] || continue
-        name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+        name="$(registry get "$d/topic.json" name)"
         [[ -n "$name" ]] || continue
         any=1
         if tmux has-session -t "=$(tmux_name_in "$tag" "$name")" 2>/dev/null; then
@@ -1130,7 +1049,7 @@ cmd_list() {
   for d in "$TOPICS_ROOT"/*/; do
     [[ -f "$d/topic.json" ]] || continue
     found=1
-    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    name="$(registry get "$d/topic.json" name)"
     [[ -n "$name" ]] || continue
     # An adopted topic is running outside tmux, so is_up() cannot see it.
     # Report that honestly rather than calling a live session "down".
@@ -1165,7 +1084,7 @@ cmd_down_all() {
   local d name did=0 skipped=""
   for d in "$TOPICS_ROOT"/*/; do
     [[ -f "$d/topic.json" ]] || continue
-    name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+    name="$(registry get "$d/topic.json" name)"
     [[ -n "$name" ]] || continue
     is_up "$name" || continue
     if [[ "$name" == "$self" && $include_self -eq 0 ]]; then skipped="$name"; continue; fi
@@ -1317,14 +1236,7 @@ cmd_move() {
   # session in its history. Leaving history transcripts behind would silently break
   # the emergency path back to a pre-handoff session.
   local uuids=() u
-  while IFS= read -r u; do [[ -n "$u" ]] && uuids+=("$u"); done < <(python3 -c '
-import json,sys
-d=json.load(open(sys.argv[1]))
-seen=[]
-if d.get("sessionId"): seen.append(d["sessionId"])
-for h in (d.get("history") or []):
-    if h.get("sessionId"): seen.append(h["sessionId"])
-print("\n".join(dict.fromkeys(seen)))' "$src_dir/topic.json")
+  while IFS= read -r u; do [[ -n "$u" ]] && uuids+=("$u"); done < <(registry session-ids "$src_dir/topic.json")
 
   local verb="Moving"; [[ $copy -eq 1 ]] && verb="Copying"
   echo "$verb \"$name\": $CLAUDE_DIR -> $dst"
@@ -1393,14 +1305,7 @@ print("\n".join(dict.fromkeys(seen)))' "$src_dir/topic.json")
 
   # Record where it came from: after a move the old profile has no trace of it, and
   # "why is this topic here?" is a real question months later.
-  python3 -c '
-import json,os,sys
-f,src=sys.argv[1],sys.argv[2]
-d=json.load(open(f))
-d["movedFrom"]=src
-d["movedAt"]=sys.argv[3]
-tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' \
-    "$dst_dir/topic.json" "$CLAUDE_DIR" "$(now_iso)"
+  registry set "$dst_dir/topic.json" movedFrom "$CLAUDE_DIR" movedAt "$(now_iso)"
 
   # A moved topic must present itself as belonging to where it now lives. Remote
   # Control identity — the name shown in the Claude UI and the ACCOUNT it appears
@@ -1421,23 +1326,7 @@ tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)' \
   # entry also holds allowedTools, and copying a permission allowlist into a profile
   # that never granted it would be a silent escalation.
   if [[ $carry -eq 1 && -n "$work_dir" ]]; then
-    python3 -c '
-import json,os,sys
-src,dstf,wd = sys.argv[1],sys.argv[2],sys.argv[3]
-KEYS=("hasTrustDialogAccepted","hasClaudeMdExternalIncludesApproved")
-try: s=json.load(open(src))
-except Exception: sys.exit(0)
-sp=(s.get("projects") or {}).get(wd) or {}
-carry={k:sp[k] for k in KEYS if k in sp}
-if not carry: sys.exit(0)
-try: d=json.load(open(dstf))
-except Exception: d={}
-d.setdefault("projects",{}).setdefault(wd,{}).update(carry)
-tmp=dstf+".tmp"
-json.dump(d,open(tmp,"w"),indent=2)
-os.replace(tmp,dstf)
-print("  carried approvals: " + ", ".join(f"{k}={v}" for k,v in carry.items()))' \
-      "$(config_file_of "$CLAUDE_DIR")" "$(config_file_of "$dst")" "$work_dir"
+    registry carry-approvals "$(config_file_of "$CLAUDE_DIR")" "$(config_file_of "$dst")" "$work_dir"
   fi
 
   local tag; tag="$(profile_tag_of "$dst")"
@@ -1498,17 +1387,7 @@ drop_bridge_records() {
   mkdir -p "$bk"
   cp "$tr" "$bk/$(basename "$tr" .jsonl)-$(date +%Y%m%d-%H%M%S).jsonl"
 
-  python3 -c '
-import json,os,sys
-f=sys.argv[1]; keep=[]
-for line in open(f):
-    try: d=json.loads(line)
-    except Exception: keep.append(line); continue
-    if d.get("type")=="bridge-session": continue
-    keep.append(line)
-tmp=f+".tmp"
-open(tmp,"w").writelines(keep)
-os.replace(tmp,f)' "$tr"
+  registry strip-bridge "$tr" >/dev/null
   printf '%s' "$old"
 }
 
@@ -1553,7 +1432,7 @@ cmd_rebridge() {
   if [[ $all -eq 1 ]]; then
     for d in "$TOPICS_ROOT"/*/; do
       [[ -f "$d/topic.json" ]] || continue
-      n="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$d/topic.json")"
+      n="$(registry get "$d/topic.json" name)"
       [[ -n "$n" ]] || continue
       if [[ -n "$self" && "$n" == "$self" ]]; then
         echo "  skipping \"$n\" — it is the session running this command"
@@ -1670,31 +1549,14 @@ cmd_rename() {
     drop_bridge_records "$tr" "$new_dir/backups" >/dev/null
     # ...and re-title the transcript, so `adopt` can find it by the new name later.
     # A rename appends a record rather than rewriting: last one wins.
-    python3 -c '
-import json,sys
-f,title,sid=sys.argv[1],sys.argv[2],sys.argv[3]
-with open(f,"a") as fh:
-    fh.write(json.dumps({"type":"custom-title","customTitle":title,"sessionId":sid})+"\n")' \
-      "$tr" "$new" "$sid"
+    registry append-title "$tr" "$new" "$sid"
   fi
 
   # Lineage recorded by `fork` points at names; leave no dangling references.
   local d n changed
   for d in "$TOPICS_ROOT"/*/; do
     [[ -f "$d/topic.json" ]] || continue
-    changed="$(python3 -c '
-import json,os,sys
-f,old,new=sys.argv[1],sys.argv[2],sys.argv[3]
-try: d=json.load(open(f))
-except Exception: sys.exit(0)
-hit=False
-if d.get("forkedFrom")==old: d["forkedFrom"]=new; hit=True
-forks=d.get("forks") or []
-if old in forks:
-    d["forks"]=[new if x==old else x for x in forks]; hit=True
-if hit:
-    tmp=f+".tmp"; json.dump(d,open(tmp,"w"),indent=2); os.replace(tmp,f)
-    print(d.get("name",""))' "$d/topic.json" "$old" "$new")"
+    changed="$(registry relink "$d/topic.json" "$old" "$new")"
     [[ -n "$changed" ]] && echo "  updated lineage in \"$changed\""
   done
 
