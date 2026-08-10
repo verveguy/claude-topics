@@ -136,14 +136,15 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 
 die() { echo "topic: $*" >&2; exit 1; }
 
-# The JSON layer lives in a Go helper (cmd/topic-registry). It was 23 inline
-# `python3 -c` blocks: code embedded in shell strings, untestable on its own and one
-# stray quote away from a runtime bug. Prefer a build sitting next to this script so
-# the repo is self-contained; fall back to PATH for an installed copy.
-REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/topic-registry"
-[[ -x "$REGISTRY" ]] || REGISTRY="$(command -v topic-registry 2>/dev/null || true)"
-[[ -n "$REGISTRY" && -x "$REGISTRY" ]] || die "topic-registry not found — run: (cd ~/dev/claude-topics && go build -o bin/topic-registry ./cmd/topic-registry)"
-registry() { "$REGISTRY" "$@"; }
+# The Go core (cmd/topic-core). Commands migrate into it one at a time behind the CLI
+# contract the test suite pins down; bash keeps the orchestration — tmux, claude,
+# launchd — which is what shell is actually good at, and which stays editable without
+# a build step. Prefer a build next to this script; fall back to PATH.
+CORE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/topic-core"
+[[ -x "$CORE" ]] || CORE="$(command -v topic-core 2>/dev/null || true)"
+[[ -n "$CORE" && -x "$CORE" ]] || die "topic-core not found — run: (cd ~/dev/claude-topics && go build -o bin/topic-core ./cmd/topic-core)"
+registry() { "$CORE" "$@"; }
+core()     { "$CORE" "$@"; }
 
 command -v tmux   >/dev/null || die "tmux not found on PATH"
 command -v claude >/dev/null || die "claude not found on PATH"
@@ -1006,64 +1007,9 @@ cmd_adopt() {
   echo "  \`topic down \"$name\"\` then \`topic up \"$name\"\` brings it fully under management."
 }
 
-cmd_status() {
-  local name="${1:?usage: topic status \"<name>\"}"
-  local f; f="$(topic_json "$name")"
-  [[ -f "$f" ]] || die "no such topic: \"$name\""
-  local state; if is_up "$name"; then state="UP"; else state="down"; fi
-  echo "$name  [$state]"
-  registry status "$f"
-}
+cmd_status()   { core show "${1:?usage: topic status \"<name>\"}" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
-cmd_list() {
-  # --all crosses every profile on the machine, so you can see the whole picture
-  # without knowing which profile a topic lives in.
-  if [[ "${1:-}" == "--all" ]]; then
-    local p tag root d name state any=0
-    while IFS= read -r p; do
-      root="$p/topics"
-      [[ -d "$root" ]] || continue
-      tag="$(profile_tag_of "$p")"
-      for d in "$root"/*/; do
-        [[ -f "$d/topic.json" ]] || continue
-        name="$(registry get "$d/topic.json" name)"
-        [[ -n "$name" ]] || continue
-        any=1
-        if tmux has-session -t "=$(tmux_name_in "$tag" "$name")" 2>/dev/null; then
-          state="UP    "
-        else
-          state="down  "
-        fi
-        printf '  %-7s %-12s %s\n' "$state" "${tag:-(default)}" "$name"
-      done
-    done < <(list_profiles)
-    [[ $any -eq 1 ]] || echo "  (no topics in any profile)"
-    return 0
-  fi
-
-  mkdir -p "$TOPICS_ROOT"
-  # Say which profile these topics belong to whenever it is not the default one —
-  # otherwise a short list looks like topics have gone missing.
-  [[ -n "$TMUX_PREFIX" ]] && echo "  (profile: $CLAUDE_DIR)"
-  local found=0 d name state
-  for d in "$TOPICS_ROOT"/*/; do
-    [[ -f "$d/topic.json" ]] || continue
-    found=1
-    name="$(registry get "$d/topic.json" name)"
-    [[ -n "$name" ]] || continue
-    # An adopted topic is running outside tmux, so is_up() cannot see it.
-    # Report that honestly rather than calling a live session "down".
-    if is_up "$name"; then
-      state="UP    "
-    elif [[ "$(reg_read "$name" state)" == "adopted" ]]; then
-      state="ADOPTED"
-    else
-      state="down  "
-    fi
-    printf '  %-7s %s\n' "$state" "$name"
-  done
-  [[ $found -eq 1 ]] || echo "  (no topics yet — \`topic up \"<name>\" [dir]\` creates one)"
-}
+cmd_list()     { core list-topics "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Put every live topic in this profile down, losslessly. Used by `topics-cycle` and
 # by hand before logging a profile in and out.
@@ -1101,23 +1047,7 @@ cmd_down_all() {
 }
 
 # Name every profile on this machine, marking the active one.
-cmd_profiles() {
-  local d tag n
-  while IFS= read -r d; do
-    tag="$(profile_tag_of "$d")"
-    n=0
-    if [[ -d "$d/topics" ]]; then
-      n="$(find "$d/topics" -maxdepth 2 -name topic.json -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
-    fi
-    local note=""
-    profile_onboarded "$d" || note="  ** first-run setup not finished — sessions will not start"
-    printf '  %s %-26s %-11s %2s topic(s)%s\n' \
-      "$([[ "$d" == "$CLAUDE_DIR" ]] && echo '*' || echo ' ')" \
-      "$d" "${tag:-(default)}" "$n" "$note"
-  done < <(list_profiles)
-  echo
-  echo "  * = active. Use another with: CLAUDE_CONFIG_DIR=<dir> topic <cmd>"
-}
+cmd_profiles() { core profiles "$CLAUDE_DIR"; }
 
 # Move a topic — registry, handoff docs, briefs, and every transcript it can still
 # resume — from this profile into another one.

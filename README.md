@@ -34,7 +34,7 @@ cd ~/dev/claude-topics
 
 Everything installs as a **symlink back into the repo**, so editing a script here
 takes effect immediately. Requires `tmux`, `claude`, `go`, and `~/.local/bin` on your
-`PATH`. `install.sh` builds `bin/topic-registry` before linking; re-run it after
+`PATH`. `install.sh` builds `bin/topic-core` before linking; re-run it after
 changing anything under `cmd/`.
 
 `./install.sh --uninstall` removes the links and the launchd agent. It deliberately
@@ -495,7 +495,11 @@ Orchestration is bash — driving `tmux`, `claude` and `launchctl` is what shell
 genuinely good at, and a symlinked script can be fixed from a phone without a build
 step, which matters for a tool whose point is working remotely.
 
-The JSON layer is Go (`cmd/topic-registry`). It was 23 inline `python3 -c` blocks:
+The Go core is `cmd/topic-core`, and commands migrate into it one at a time behind
+the CLI contract the test suite pins down. Migrated so far: the JSON layer, and the
+read-only commands (`list`, `status`, `profiles`).
+
+The JSON layer went first. It was 23 inline `python3 -c` blocks:
 code embedded in shell strings, untestable on its own and one stray quote away from a
 runtime bug — two of this project's bugs came from exactly that. `bin/topic` calls it
 as `registry <subcommand>`; there is no Python dependency left.
@@ -510,7 +514,7 @@ pins down.
 ```
 bin/topic                  topic manager (orchestration: tmux, claude, launchd)
 bin/topics-cycle           take everything down / bring it back, across profiles
-cmd/topic-registry/        the JSON layer, in Go — registry, configs, transcripts
+cmd/topic-core/            the Go core — JSON layer, list/status/profiles
 test/                      Go tests driving the CLI as a black box
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session

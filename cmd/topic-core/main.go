@@ -1,4 +1,4 @@
-// topic-registry is the JSON layer behind `topic`.
+// topic-core is the JSON layer behind `topic`.
 //
 // It exists because that layer was 23 inline `python3 -c` blocks: code embedded in
 // shell strings, where a stray quote is a runtime bug and nothing is testable on its
@@ -28,7 +28,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fail("usage: topic-registry <command> [args...]")
+		fail("usage: topic-core <command> [args...]")
 	}
 	args := os.Args[2:]
 	var err error
@@ -45,6 +45,12 @@ func main() {
 		err = cmdRelink(args)
 	case "status":
 		err = cmdStatus(args)
+	case "list-topics":
+		err = cmdList(args)
+	case "show":
+		err = cmdStatusCmd(args)
+	case "profiles":
+		err = cmdProfiles(args)
 	case "session-ids":
 		err = cmdSessionIDs(args)
 	case "project-flag":
@@ -74,13 +80,13 @@ func main() {
 }
 
 func fail(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "topic-registry: "+format+"\n", a...)
+	fmt.Fprintf(os.Stderr, "topic-core: "+format+"\n", a...)
 	os.Exit(1)
 }
 
 func need(args []string, n int, usage string) {
 	if len(args) < n {
-		fail("usage: topic-registry %s", usage)
+		fail("usage: topic-core %s", usage)
 	}
 }
 
