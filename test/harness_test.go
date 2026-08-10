@@ -154,6 +154,26 @@ func (e *env) exists(parts ...string) bool {
 	return err == nil
 }
 
+// slug mirrors the CLI's slugify(): the registry directory is derived from the
+// display name, and a test that hardcodes the wrong one tests nothing.
+func slug(name string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
 func mkdirAll(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {

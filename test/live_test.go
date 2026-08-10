@@ -1,6 +1,7 @@
 package test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -178,4 +179,97 @@ func lastBridgeID(body string) string {
 		i = start + end
 	}
 	return last
+}
+
+// handoff-swap is the tool's original reason for existing: retire the current
+// session, archive its UUID, and start a fresh one seeded with the handoff doc under
+// the same topic name.
+func TestLiveHandoffSwapRetiresAndReseeds(t *testing.T) {
+	e := liveEnv(t)
+	name := uniqueName(t)
+	workDir := filepath.Join(t.TempDir(), "work")
+	mkdirAll(t, workDir)
+	t.Cleanup(func() { e.tearDown(name, workDir) })
+
+	e.mustRun("up", name, workDir)
+	before, _ := e.readTopicField(name, "sessionId")
+
+	doc := strings.TrimSpace(e.mustRun("handoff-path", name).stdout)
+	if err := os.WriteFile(doc, []byte("# Brief\n\nReply `SWAPPED` and stop.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun("handoff-swap", name)
+
+	after, _ := e.readTopicField(name, "sessionId")
+	if after == before || after == "" {
+		t.Errorf("session was not replaced: %q -> %q", before, after)
+	}
+	if gen, _ := e.readTopicField(name, "generation"); gen != "2" {
+		t.Errorf("generation = %q, want 2", gen)
+	}
+	if n, _ := e.readTopicField(name, "retired sessions"); n != "1" {
+		t.Errorf("retired sessions = %q, want 1 — the old UUID must be archived", n)
+	}
+}
+
+// fork must record lineage both ways and give the child the parent's directory.
+func TestLiveForkRecordsLineageBothWays(t *testing.T) {
+	e := liveEnv(t)
+	parent, child := uniqueName(t)+" P", uniqueName(t)+" C"
+	workDir := filepath.Join(t.TempDir(), "work")
+	mkdirAll(t, workDir)
+	t.Cleanup(func() { e.tearDown(child, ""); e.tearDown(parent, workDir) })
+
+	e.mustRun("up", parent, workDir)
+
+	brief := strings.TrimSpace(e.mustRun("fork-path", child).stdout)
+	if err := os.WriteFile(brief, []byte("# Brief\n\nReply `FORKED` and stop.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun("fork", child, "--from", parent)
+
+	if got, _ := e.readTopicField(child, "forkedFrom"); got != parent {
+		t.Errorf("child forkedFrom = %q, want %q", got, parent)
+	}
+	if got, _ := e.readTopicField(parent, "forks"); !strings.Contains(got, child) {
+		t.Errorf("parent forks = %q, want it to contain %q", got, child)
+	}
+	if got, _ := e.readTopicField(child, "dir"); got != workDir {
+		t.Errorf("child dir = %q, want the parent's %q", got, workDir)
+	}
+}
+
+// A profile that has not completed first-run setup cannot be automated: topic must
+// fail fast and leave nothing parked at a prompt, rather than time out.
+func TestLiveRefusesUnonboardedProfile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in -short mode")
+	}
+	home, _ := os.UserHomeDir()
+	profile := filepath.Join(home, ".claude-openrouter")
+	var cfg map[string]any
+	if b, err := os.ReadFile(filepath.Join(profile, ".claude.json")); err != nil {
+		t.Skip("no un-onboarded profile available to test against")
+	} else if json.Unmarshal(b, &cfg); cfg["hasCompletedOnboarding"] == true {
+		t.Skip("that profile has since been set up — nothing to assert")
+	}
+
+	e := &env{t: t, configDir: profile, topicsRoot: filepath.Join(t.TempDir(), "topics")}
+	name := uniqueName(t)
+	workDir := filepath.Join(t.TempDir(), "work")
+	mkdirAll(t, workDir)
+	t.Cleanup(func() {
+		exec.Command("tmux", "kill-session", "-t", "="+tmuxName(e, name)).Run()
+	})
+
+	r := e.run("up", name, workDir)
+	if r.code == 0 {
+		t.Fatal("up should refuse a profile that has not completed first-run setup")
+	}
+	mustContain(t, r.out(), "first-run setup", "should name the real problem")
+
+	out, _ := exec.Command("tmux", "ls").Output()
+	if strings.Contains(string(out), tmuxName(e, name)) {
+		t.Error("a session was left parked at the prompt")
+	}
 }

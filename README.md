@@ -472,15 +472,21 @@ serves as the specification and acceptance criteria for that migration.
 Two tiers:
 
 - **Hermetic** — a sandboxed registry (`CLAUDE_TOPICS_ROOT`) and config dir, no session
-  ever launched. One test per defect found on 2026-08-09, each documenting the bug it
-  locks out.
+  ever launched. Covers each command's contract, plus one regression test per defect
+  found on 2026-08-09 documenting the bug it locks out.
 - **Live** — really launches Claude Code, because session initialisation (trust
   prompts, first-run setup, Remote Control bridges) is where the hard-won behaviour
   lives and cannot be faked. Needs `TOPIC_TEST_PROFILE` pointing at a **real
   logged-in** profile: credentials are per-profile, so a throwaway config dir is not
   logged in. The registry stays sandboxed, so live tests cannot touch real topics;
   they launch with no seed prompt, so nothing is billed, and they clean up after
-  themselves.
+  themselves. Includes `handoff-swap` and `fork` end to end, and the refusal to
+  automate a profile that has not completed first-run setup.
+
+Coverage is 17 of 18 commands (all but `ensure-dispatcher`, which launches the
+Dispatcher on the developer's own machine) and every flag that changes behaviour
+rather than wording. `topics-cycle`'s `down`/`up` are deliberately untested: they
+unload launchd agents, so a test run would stop the real Dispatchers.
 
 ## Layout
 
