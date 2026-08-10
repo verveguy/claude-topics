@@ -181,17 +181,31 @@ move.
 
 ### Renaming
 
-A topic's name lives in five places, and they drift apart easily — `/rename` in the
-Claude UI, for instance, changes only the cloud one, leaving every local command still
-using the old name:
+A *session* carries its name in five places, and nothing keeps them in step:
+
+| where | set by |
+|---|---|
+| the tmux session | `tmux new-session -s` |
+| the peer name in `ListAgents` | `--name` |
+| the name in the Claude UI | `--remote-control`, pinned to a bridge |
+| the transcript's `custom-title` | the session itself, appended on each rename |
+| the topic registry | `topic` |
+
+They drift apart the moment anything renames one of them in isolation — `/rename` in
+the Claude UI, for instance, changes only the cloud name, leaving every local command
+still using the old one.
+
+This is the session-level problem a **topic** exists to solve. The topic name is the
+one that is authoritative; the five above are just how a session happens to present
+itself, and keeping them consistent is the tool's job rather than yours:
 
 ```bash
 topic rename "<old>" "<new>"
 ```
 
-It updates the registry directory and `name`, the tmux session, the peer name other
-sessions see in `ListAgents`, the Claude UI name (via a bridge re-mint), and the
-transcript's `custom-title` so `adopt` can still find it later. `forkedFrom`/`forks`
+That updates all five — the registry directory and `name`, the tmux session, the peer
+name other sessions see in `ListAgents`, the Claude UI name (via a bridge re-mint),
+and the transcript's `custom-title` so `adopt` can still find it later. `forkedFrom`/`forks`
 references in other topics are repointed too, so lineage survives. A live topic is put
 down and brought back up under the new name; `--dry-run` shows the plan.
 

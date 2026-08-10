@@ -131,9 +131,11 @@ procedure. `topic whoami` names the topic the current session is sitting in.
 
 ## Renaming, and Remote Control names
 
-A topic's name lives in five places: the registry, the tmux session, the peer name in
-`ListAgents`, the name in the Claude UI, and the transcript's title. `topic rename
-"<old>" "<new>"` changes all of them; nothing else does.
+A *session* carries its name in five places — the tmux session, the peer name in
+`ListAgents`, the name in the Claude UI, the transcript's title, and the registry —
+and nothing keeps them in step. A **topic** is the layer that does: the topic name is
+authoritative, and `topic rename "<old>" "<new>"` propagates it to all five. Nothing
+else does.
 
 - **`/rename` in the Claude UI changes only the cloud name.** If a user reports a
   session whose UI name does not match anything local, that is why — the topic is

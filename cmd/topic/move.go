@@ -374,8 +374,11 @@ func sessionIDsOf(file string) []string {
 
 //	rename <old> <new> <config-dir> <topics-root> [--dry-run]
 //
-// A topic's name lives in five places and they drift apart easily — /rename in the
-// Claude UI, for instance, changes only the cloud one.
+// A SESSION carries its name in five places — tmux, --name, --remote-control, the
+// transcript's custom-title, and the registry — and nothing keeps them in step;
+// /rename in the Claude UI, for instance, changes only the cloud one. Keeping them
+// consistent is what layering a topic over a session buys, and this is where that is
+// paid for.
 func cmdRename(args []string) error {
 	dry := false
 	var positional []string
