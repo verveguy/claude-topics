@@ -57,6 +57,22 @@ func main() {
 		err = cmdPrune(args)
 	case "rebridge":
 		err = cmdRebridge(args)
+	case "up":
+		err = cmdUp(args)
+	case "down":
+		err = cmdDown(args)
+	case "down-all":
+		err = cmdDownAll(args)
+	case "whoami":
+		err = cmdWhoami(args)
+	case "path":
+		err = cmdPath(args)
+	case "ensure-dispatcher":
+		err = cmdEnsureDispatcher(args)
+	case "fork":
+		err = cmdFork(args)
+	case "handoff-swap":
+		err = cmdHandoffSwap(args)
 	case "session-ids":
 		err = cmdSessionIDs(args)
 	case "project-flag":

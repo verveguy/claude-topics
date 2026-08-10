@@ -266,266 +266,26 @@ lock_acquire() {
   trap 'rmdir "$LOCK_PATH" 2>/dev/null || true' EXIT
 }
 
-# ---------------------------------------------------------------- launching
-
-# launch_session <display-name> <dir> <claude-args...>
-# Creates a detached tmux session and sends the claude command into it.
-# send-keys (not `tmux new -d claude`) so the shell survives claude exiting.
-launch_session() {
-  local name="$1" dir="$2"; shift 2
-  local tn; tn="$(tmux_name "$name")"
-
-  mkdir -p "$dir"; dir="$(cd "$dir" && pwd)"
-
-  # Pin the profile onto the command itself. A detached tmux session does NOT
-  # reliably inherit our environment — the tmux server may long predate us — and a
-  # session launched under the wrong profile writes its transcript somewhere this
-  # `topic` cannot see, breaking adopt/prune/resume in confusing ways.
-  #
-  # But ONLY for non-default profiles. CLAUDE_CONFIG_DIR=~/.claude is NOT the same as
-  # leaving it unset: unset reads ~/.claude.json, set reads ~/.claude/.claude.json —
-  # a different file that has never completed onboarding, so the session comes up at
-  # the first-run theme picker and hangs. The default profile must stay unset.
-  local cmd="claude"
-  [[ -n "$PROFILE_TAG" ]] &&
-    cmd="CLAUDE_CONFIG_DIR=$(printf '%q' "$CLAUDE_DIR") claude"
-  local a; for a in "$@"; do cmd+=" $(printf '%q' "$a")"; done
-
-  tmux new-session -d -s "$tn" -c "$dir"
-  tmux send-keys -t "$tn" "$cmd" Enter
-
-  # Auto-accept the workspace trust prompt if it appears; otherwise wait for a
-  # readiness marker. NOTE: this heuristic keys on Claude Code's startup text and
-  # has needed updating before — suspect it first if startup detection misbehaves.
-  printf "  starting"
-  local i pane trusted=0
-  for i in $(seq 1 40); do
-    pane="$(tmux capture-pane -t "$tn" -p 2>/dev/null || true)"
-    # Accept the workspace trust prompt, then KEEP POLLING. Breaking out here was a
-    # bug: further prompts can follow it (the external-imports one below), and the
-    # session would be reported up while still sitting on an unanswered question.
-    if [[ $trusted -eq 0 ]] && printf '%s' "$pane" | grep -q "trust this folder"; then
-      sleep 0.3; tmux send-keys -t "$tn" Enter; printf " (trust accepted)"; trusted=1
-      continue
-    fi
-    # A security question topic will NOT answer for the user. Seen the first time a
-    # profile opens a project whose CLAUDE.md imports from outside the working
-    # directory.
-    if printf '%s' "$pane" | grep -q "Allow external CLAUDE.md file imports"; then
-      tmux kill-session -t "=$tn" 2>/dev/null || true
-      echo >&2
-      echo "topic: \"$name\" needs a one-off decision this profile has not made yet:" >&2
-      echo "  \"Allow external CLAUDE.md file imports?\" — a security question about" >&2
-      echo "  imports outside $dir, which topic will not answer for you." >&2
-      echo "  Start it once by hand, answer it, then retry:" >&2
-      if [[ -n "$PROFILE_TAG" ]]; then
-        echo "    (cd $dir && CLAUDE_CONFIG_DIR=$CLAUDE_DIR claude)" >&2
-      else
-        echo "    (cd $dir && claude)" >&2
-      fi
-      die "unanswered startup prompt"
-    fi
-    if printf '%s' "$pane" | grep -qiE "Welcome back|remote-control is active"; then
-      break
-    fi
-    # First-run setup: the theme picker or a login prompt. `topic` must not answer
-    # these — picking a theme and choosing an account are the user's decisions — and
-    # waiting is pointless, so fail fast rather than time out and leave a session
-    # parked at a prompt that `is_up` would happily report as UP.
-    if printf '%s' "$pane" | grep -qiE "colorblind-friendly|Select login method|Choose the text style"; then
-      tmux kill-session -t "=$tn" 2>/dev/null || true
-      echo >&2
-      echo "topic: profile $CLAUDE_DIR has not completed first-run setup." >&2
-      echo "  The session opened on the theme/login prompt, which topic will not answer" >&2
-      echo "  for you. Run it once interactively, then retry:" >&2
-      if [[ -n "$PROFILE_TAG" ]]; then
-        echo "    CLAUDE_CONFIG_DIR=$CLAUDE_DIR claude" >&2
-      else
-        echo "    claude" >&2
-      fi
-      echo "  Its config file is $(config_file_of "$CLAUDE_DIR")" >&2
-      die "profile not set up"
-    fi
-    sleep 0.5; printf "."
-  done
-  echo
-}
-
-# Gracefully stop the claude process in a topic's tmux session, then kill it.
-stop_session() {
-  local tn; tn="$(tmux_name "$1")"
-  tmux has-session -t "=$tn" 2>/dev/null || return 0
-  # Escape interrupts any in-flight turn; /exit quits Claude cleanly so the
-  # transcript is flushed. Transcripts are written incrementally, so even a hard
-  # kill stays resumable — this is just the tidy path.
-  tmux send-keys -t "$tn" Escape 2>/dev/null || true
-  sleep 0.4
-  tmux send-keys -t "$tn" "/exit" Enter 2>/dev/null || true
-  local i
-  for i in $(seq 1 12); do
-    tmux has-session -t "=$tn" 2>/dev/null || return 0
-    if ! tmux list-panes -t "=$tn" -F '#{pane_current_command}' 2>/dev/null | grep -qi claude; then
-      break
-    fi
-    sleep 0.5
-  done
-  tmux kill-session -t "=$tn" 2>/dev/null || true
-}
-
-new_uuid() { uuidgen | tr '[:upper:]' '[:lower:]'; }
+# Session launching and stopping — including the startup-prompt heuristics — now live
+# in cmd/topic-core/session.go, in one place rather than two.
 
 # ---------------------------------------------------------------- commands
 
-cmd_up() {
-  local name="" dir="" claim=0 seed_from=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --claim) claim=1; shift ;;
-      --seed-from) seed_from="$2"; shift 2 ;;
-      *) if [[ -z "$name" ]]; then name="$1"; else dir="$1"; fi; shift ;;
-    esac
-  done
-  [[ -n "$name" ]] || die "usage: topic up \"<name>\" [dir] [--claim] [--seed-from <file>]"
-  if [[ -n "$seed_from" ]]; then
-    [[ -f "$seed_from" ]] || die "--seed-from: no such file: $seed_from"
-    [[ -s "$seed_from" ]] || die "--seed-from: file is empty: $seed_from"
-    seed_from="$(cd "$(dirname "$seed_from")" && pwd)/$(basename "$seed_from")"
-  fi
+cmd_up()                { core up "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
-  lock_acquire "$name"
+cmd_down()              { core down "${1:?usage: topic down \"<name>\"}" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
-  # An adopted topic still has its ORIGINAL process running outside tmux. Starting
-  # here would --resume the same session UUID in a second process: two writers on
-  # one transcript, which corrupts it.
-  #
-  # When adoption went through ~/.claude/sessions we know the original pid, so the
-  # hazard IS detectable — and --claim must not be allowed to override a process we
-  # can still see. Match on sessionId too, in case the pid has been recycled.
-  local adopted_pid=""
-  if [[ "$(reg_read "$name" state)" == "adopted" ]]; then
-    adopted_pid="$(reg_read "$name" adoptedPid)"
-    if [[ -n "$adopted_pid" ]]; then
-      local asid live
-      asid="$(reg_read "$name" sessionId)"
-      live="$(live_sessions || true)"
-      if [[ "$live" == *"$adopted_pid	$asid	"* ]]; then
-        echo "\"$name\" is still running as pid $adopted_pid, outside tmux." >&2
-        echo "  Resuming session ${asid:0:8}… in a second process would corrupt its" >&2
-        echo "  transcript. Exit that session (/exit in its window), then re-run." >&2
-        die "refusing to start while the original process is alive"
-      fi
-      # Positively verified gone — no need to make the caller assert it.
-      claim=1
-    fi
-  fi
-
-  # No pid on record (probe-adopted, or an older registry entry): we cannot see the
-  # original process, so make the caller assert it is gone.
-  if [[ "$(reg_read "$name" state)" == "adopted" && $claim -eq 0 ]]; then
-    echo "\"$name\" was adopted but not yet claimed." >&2
-    echo "" >&2
-    echo "  Its original session is running OUTSIDE tmux. Starting it here would" >&2
-    echo "  resume the same session UUID in a second process and corrupt the" >&2
-    echo "  transcript." >&2
-    echo "" >&2
-    echo "  1. Exit the original session (/exit in its window)." >&2
-    echo "  2. topic up \"$name\" --claim" >&2
-    die "refusing to start until the original session has exited"
-  fi
-
-  if is_up "$name"; then
-    echo "\"$name\" is already up."
-    echo "  attach: tmux attach -t \"$(tmux_name "$name")\""
-    return 0
-  fi
-
-  local recorded_dir sid
-  recorded_dir="$(reg_read "$name" dir)"
-  [[ -z "$dir" ]] && dir="${recorded_dir:-$PWD}"
-  sid="$(reg_read "$name" sessionId)"
-
-  if [[ -n "$sid" ]]; then
-    [[ -n "$seed_from" ]] &&
-      echo "note: --seed-from ignored; \"$name\" has an existing session to resume." >&2
-    echo "Picking up \"$name\" (resuming session ${sid:0:8}…) in $dir"
-    launch_session "$name" "$dir" --remote-control "$name" --name "$name" --resume "$sid"
-  else
-    sid="$(new_uuid)"
-    echo "Starting \"$name\" (new session ${sid:0:8}…) in $dir"
-    if [[ -n "$seed_from" ]]; then
-      # Same seeding path handoff-swap uses, but for a brand-new topic: start a
-      # topic from a brief (a handoff doc, an ideas/ note, an issue write-up).
-      local seed="You are starting the topic \"$name\". Read the briefing document at $seed_from — it contains the context you need. Summarise briefly what you picked up, then continue from there."
-      launch_session "$name" "$dir" --remote-control "$name" --name "$name" \
-                     --session-id "$sid" "$seed"
-      reg_write "$name" name "$name" generation "1" seededFrom "$seed_from"
-    else
-      launch_session "$name" "$dir" --remote-control "$name" --name "$name" --session-id "$sid"
-      reg_write "$name" name "$name" generation "1"
-    fi
-  fi
-
-  reg_write "$name" name "$name" dir "$dir" sessionId "$sid" \
-            state "up" lastPickedUp "$(now_iso)"
-  echo "\"$name\" is up. Remote Control name: \"$name\""
-}
-
-cmd_down() {
-  local name="${1:?usage: topic down \"<name>\"}"
-  if ! is_up "$name"; then
-    # An adopted session runs outside tmux, so we cannot stop it for the user.
-    # Say so plainly rather than reporting a false "already down".
-    if [[ "$(reg_read "$name" state)" == "adopted" ]]; then
-      echo "\"$name\" was adopted and is running OUTSIDE tmux — topic cannot stop it."
-      echo "  Exit that session yourself (/exit in its window), then:"
-      echo "    topic up \"$name\"   # relaunches it under topic management, resuming context"
-      return 0
-    fi
-    echo "\"$name\" is already down."
-    return 0
-  fi
-  echo "Putting down \"$name\"…"
-  stop_session "$name"
-  reg_write "$name" state "down" lastPutDown "$(now_iso)"
-  echo "\"$name\" is down. Session retained — \`topic up \"$name\"\` resumes it."
-}
-
-cmd_handoff_path() {
-  local name="${1:?usage: topic handoff-path \"<name>\"}"
-  local d; d="$(topic_dir "$name")/handoffs"
-  mkdir -p "$d"
-  printf '%s/%s.md\n' "$d" "$(date +%Y%m%d-%H%M%S)"
-}
+cmd_handoff_path()      { core path handoffs "${1:?usage: topic handoff-path \"<name>\"}" "$TOPICS_ROOT"; }
 
 # Which topic is the caller sitting in? Sessions are launched inside tmux under the
 # topic's (mangled) name, so the tmux session name is the answer — no probing, and it
 # works from any subprocess of the session.
-cmd_whoami() {
-  [[ -n "${TMUX:-}" ]] || die "whoami: not inside tmux — no topic to infer"
-  local s; s="$(tmux display-message -p '#S' 2>/dev/null || true)"
-  [[ -n "$s" ]] || die "whoami: could not read the tmux session name"
-
-  # tmux_name() mangles ':' and '.', so map back through the registry rather than
-  # trusting the tmux name to be the display name.
-  local d name
-  for d in "$TOPICS_ROOT"/*/; do
-    [[ -f "$d/topic.json" ]] || continue
-    name="$(registry get "$d/topic.json" name)"
-    [[ -n "$name" ]] || continue
-    if [[ "$(tmux_name "$name")" == "$s" ]]; then printf '%s\n' "$name"; return 0; fi
-  done
-  die "whoami: tmux session \"$s\" is not a registered topic"
-}
+cmd_whoami()            { core whoami "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Where a fork brief must be written. Kept separate from handoffs/: a handoff doc
 # looks backward over a topic's own history, a brief looks forward and is the child
 # topic's origin document.
-cmd_fork_path() {
-  local name="${1:?usage: topic fork-path \"<new topic>\"}"
-  local d; d="$(topic_dir "$name")/briefs"
-  mkdir -p "$d"
-  printf '%s/%s.md\n' "$d" "$(date +%Y%m%d-%H%M%S)"
-}
+cmd_fork_path()         { core path briefs "${1:?usage: topic fork-path \"<new topic>\"}" "$TOPICS_ROOT"; }
 
 # Split a thread off into its own topic, seeded with a brief.
 #
@@ -534,107 +294,9 @@ cmd_fork_path() {
 # The brief must already be written — only the session holding the context can write
 # it, exactly as with handoff. --from defaults to the caller's own topic, and the
 # working directory to the parent's.
-cmd_fork() {
-  local name="" dir="" parent="" brief=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --from)  parent="$2"; shift 2 ;;
-      --brief) brief="$2";  shift 2 ;;
-      *) if [[ -z "$name" ]]; then name="$1"; else dir="$1"; fi; shift ;;
-    esac
-  done
-  [[ -n "$name" ]] || die "usage: topic fork \"<new topic>\" [dir] [--from \"<parent>\"] [--brief <file>]"
+cmd_fork()         { core fork "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
-  [[ -z "$(reg_read "$name" sessionId)" ]] ||
-    die "fork: \"$name\" already exists with a session — pick another name, or \`topic up \"$name\"\`"
-
-  # Default the parent to whoever is calling, when that is knowable. The `||` must
-  # sit OUTSIDE the substitution: cmd_whoami fails via die/exit, which aborts the
-  # subshell before any `|| true` inside it could run, and set -e would kill us.
-  if [[ -z "$parent" ]]; then parent="$(cmd_whoami 2>/dev/null)" || parent=""; fi
-
-  if [[ -z "$brief" ]]; then
-    brief="$(ls -1t "$(topic_dir "$name")/briefs"/*.md 2>/dev/null | head -1 || true)"
-  fi
-  [[ -n "$brief" && -f "$brief" ]] ||
-    die "fork: no brief for \"$name\" — write one first: topic fork-path \"$name\""
-  [[ -s "$brief" ]] || die "fork: brief $brief is empty — refusing to fork"
-  brief="$(cd "$(dirname "$brief")" && pwd)/$(basename "$brief")"
-
-  # A fork inherits the parent's working directory unless told otherwise. Without
-  # this it would land in $PWD — which, when you fork remotely through the
-  # Dispatcher, is the Dispatcher's home, not the work.
-  if [[ -z "$dir" && -n "$parent" ]]; then dir="$(reg_read "$parent" dir)"; fi
-  [[ -n "$dir" ]] || dir="$PWD"
-
-  local sid; sid="$(new_uuid)"
-  local seed="You are starting the topic \"$name\"."
-  [[ -n "$parent" ]] && seed+=" It was forked from the topic \"$parent\" to carry one thread on its own."
-  seed+=" Read the brief at $brief — it was written for you by the session you were forked from, and is the only context you carry. Summarise briefly what you picked up, then continue from there."
-
-  lock_acquire "$name"
-  echo "Forking${parent:+ \"$parent\" ->} \"$name\" (new session ${sid:0:8}…) in $dir"
-  echo "  brief: $brief"
-  launch_session "$name" "$dir" --remote-control "$name" --name "$name" \
-                 --session-id "$sid" "$seed"
-
-  # Built as an array: an unquoted ${parent:+...} would word-split a topic name
-  # like "Fantasy Economics" into two arguments and corrupt the key/value pairing.
-  local kv=(name "$name" dir "$dir" sessionId "$sid" state "up"
-            generation "1" seededFrom "$brief" lastPickedUp "$(now_iso)")
-  [[ -n "$parent" ]] && kv+=(forkedFrom "$parent")
-  reg_write "$name" "${kv[@]}"
-  [[ -n "$parent" ]] && reg_push_fork "$parent" "$name"
-
-  echo "\"$name\" is up. Remote Control name: \"$name\""
-  if [[ -n "$parent" ]]; then
-    echo ""
-    echo "  \"$parent\" still carries this thread in its own context. To shed it:"
-    echo "    topic handoff-swap \"$parent\"   # after writing its handoff doc"
-  fi
-}
-
-cmd_handoff_swap() {
-  local name="" doc="" focus=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --focus) focus="$2"; shift 2 ;;
-      *) if [[ -z "$name" ]]; then name="$1"; else doc="$1"; fi; shift ;;
-    esac
-  done
-  [[ -n "$name" ]] || die "usage: topic handoff-swap \"<name>\" [handoff-doc] [--focus \"<what to pick up>\"]"
-
-  if [[ -z "$doc" ]]; then
-    doc="$(ls -1t "$(topic_dir "$name")/handoffs"/*.md 2>/dev/null | head -1 || true)"
-  fi
-  [[ -n "$doc" && -f "$doc" ]] || die "no handoff doc found for \"$name\" — write one first (topic handoff-path \"$name\")"
-  [[ -s "$doc" ]] || die "handoff doc $doc is empty — refusing to swap"
-
-  local old_sid dir gen
-  old_sid="$(reg_read "$name" sessionId)"
-  dir="$(reg_read "$name" dir)"; [[ -n "$dir" ]] || dir="$PWD"
-  gen="$(reg_read "$name" generation)"; [[ -n "$gen" ]] || gen=1
-
-  echo "Handing off \"$name\" (generation $gen -> $((gen+1)))"
-  echo "  handoff doc: $doc"
-
-  # Retire the old session first so the topic stays a singleton.
-  stop_session "$name"
-  [[ -n "$old_sid" ]] && reg_push_history "$name" "$old_sid" "$doc"
-
-  local new_sid; new_sid="$(new_uuid)"
-  local seed="You are resuming the topic \"$name\" in a fresh session. Read the handoff document at $doc — it was written by your previous session on this topic and contains the salient context. Summarise briefly what you picked up, then continue from there."
-  if [[ -n "$focus" ]]; then
-    seed+=" The handoff is focused on: ${focus}. Start there. The doc also lists other open threads that were deliberately set aside — do not act on those unless asked, but do not treat them as finished either."
-  fi
-
-  launch_session "$name" "$dir" --remote-control "$name" --name "$name" --session-id "$new_sid" "$seed"
-
-  reg_write "$name" name "$name" dir "$dir" sessionId "$new_sid" \
-            state "up" generation "$((gen+1))" lastPickedUp "$(now_iso)" \
-            lastHandoff "$doc"
-  echo "\"$name\" is up on a fresh session (${new_sid:0:8}…). Old session archived in history."
-}
+cmd_handoff_swap() { core handoff-swap "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Unregister a topic. Handoff docs are KEPT by default — they are often the only
 # surviving record of what a topic was about, and "stop tracking this" should not
@@ -932,35 +594,7 @@ cmd_list()     { core list-topics "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 #
 # The caller's OWN topic is skipped by default: putting it down terminates the
 # session running this command, so the rest of the loop would never execute.
-cmd_down_all() {
-  local include_self=0 dry=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --include-self) include_self=1; shift ;;
-      --dry-run)      dry=1; shift ;;
-      *) die "down-all: unexpected argument: $1" ;;
-    esac
-  done
-
-  local self; self="$(cmd_whoami 2>/dev/null)" || self=""
-  local d name did=0 skipped=""
-  for d in "$TOPICS_ROOT"/*/; do
-    [[ -f "$d/topic.json" ]] || continue
-    name="$(registry get "$d/topic.json" name)"
-    [[ -n "$name" ]] || continue
-    is_up "$name" || continue
-    if [[ "$name" == "$self" && $include_self -eq 0 ]]; then skipped="$name"; continue; fi
-    did=1
-    if [[ $dry -eq 1 ]]; then echo "  would put down: $name"; else cmd_down "$name"; fi
-  done
-
-  [[ $did -eq 1 ]] || echo "  nothing up in this profile."
-  if [[ -n "$skipped" ]]; then
-    echo ""
-    echo "  Skipped \"$skipped\" — it is the session running this command."
-    echo "  Put it down last, yourself:  topic down \"$skipped\""
-  fi
-}
+cmd_down_all()          { core down-all "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Name every profile on this machine, marking the active one.
 cmd_profiles() { core profiles "$CLAUDE_DIR"; }
@@ -1350,15 +984,7 @@ cmd_rename() {
   fi
 }
 
-cmd_ensure_dispatcher() {
-  if is_up "$DISPATCHER_NAME"; then
-    echo "\"$DISPATCHER_NAME\" is up."
-    return 0
-  fi
-  local dir; dir="$(reg_read "$DISPATCHER_NAME" dir)"; [[ -n "$dir" ]] || dir="$HOME"
-  echo "\"$DISPATCHER_NAME\" is down — starting it."
-  cmd_up "$DISPATCHER_NAME" "$dir"
-}
+cmd_ensure_dispatcher() { core ensure-dispatcher "$DISPATCHER_NAME" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 usage() {
   # Everything between the shebang and `set -euo` is the help text — no line
