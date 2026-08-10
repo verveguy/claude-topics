@@ -1,3 +1,3 @@
-bin/topic
-bin/topic-core
+/bin/*
+!/bin/topics-cycle
 .DS_Store
