@@ -25,13 +25,10 @@ or replaced.
 
 ## For a new user
 
-The repo is **private**, so the first step is access — everything below needs it,
-including the marketplace, which Claude Code fetches over your git credentials.
-
 **The whole thing** (CLI, skills, and a Dispatcher kept alive by launchd):
 
 ```bash
-gh repo clone verveguy/claude-topics ~/dev/claude-topics
+git clone https://github.com/verveguy/claude-topics.git ~/dev/claude-topics
 cd ~/dev/claude-topics && ./install.sh
 topic --help
 ```
@@ -245,7 +242,7 @@ Topics are per-profile, and the tool can see across all of them:
 ```bash
 topic profiles                        # every profile, and how many topics it holds
 topic list --all                      # every topic in every profile
-topic move "<name>" --to v3rv         # move a topic into another profile
+topic move "<name>" --to work         # move a topic into another profile
 topic move "<name>" --to default --dry-run
 ```
 
@@ -612,3 +609,7 @@ install.sh                 symlink installer
 Runtime state lives outside the repo, in `~/.claude/topics/<slug>/`:
 `topic.json` (name, dir, current session UUID, generation, history) and
 `handoffs/*.md`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

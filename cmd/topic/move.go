@@ -42,7 +42,7 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// resolveProfile turns "v3rv" into ~/.claude-v3rv, "default" into ~/.claude, and
+// resolveProfile turns "work" into ~/.claude-work, "default" into ~/.claude, and
 // leaves an absolute path alone.
 func resolveProfile(s string) string {
 	home, _ := os.UserHomeDir()
@@ -92,7 +92,7 @@ func cmdMove(args []string) error {
 	name = positional[0]
 	configDir, topicsRoot := positional[len(positional)-2], positional[len(positional)-1]
 	if to == "" {
-		return fmt.Errorf(`move: --to <profile> is required (a tag like "v3rv", "default", or a path)`)
+		return fmt.Errorf(`move: --to <profile> is required (a tag like "work", "default", or a path)`)
 	}
 
 	dst := resolveProfile(to)

@@ -30,7 +30,7 @@ func slugify(name string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// profileTag labels a non-default profile: ~/.claude-v3rv -> "v3rv". The default
+// profileTag labels a non-default profile: ~/.claude-work -> "work". The default
 // profile has no tag, which is what keeps its tmux names bare.
 func profileTag(configDir string) string {
 	home, _ := os.UserHomeDir()
