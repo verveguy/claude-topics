@@ -504,8 +504,14 @@ Two tiers:
   lives and cannot be faked. Needs `TOPIC_TEST_PROFILE` pointing at a **real
   logged-in** profile: credentials are per-profile, so a throwaway config dir is not
   logged in. The registry stays sandboxed, so live tests cannot touch real topics;
-  they launch with no seed prompt, so nothing is billed, and they clean up after
-  themselves. Includes `handoff-swap` and `fork` end to end, and the refusal to
+  they launch with no seed prompt where possible, so little or nothing is billed, and
+  they clean up their local state completely.
+
+  One thing they cannot clean up: each launch registers a **Remote Control session in
+  the cloud**, which the CLI cannot delete. A `ZZ Test …` entry lingers in the Claude
+  UI per launched session until deleted there — the same ghosting described under
+  non-obvious mechanics. That is the main reason the live tier is opt-in: run it when
+  you are changing session handling, not on every save. Includes `handoff-swap` and `fork` end to end, and the refusal to
   automate a profile that has not completed first-run setup.
 
 Coverage is 17 of 18 commands (all but `ensure-dispatcher`, which launches the

@@ -22,8 +22,16 @@ import (
 //
 //	TOPIC_TEST_PROFILE=~/.claude-personal go test ./test/
 //
-// Topics are launched with no seed prompt, so the session comes up idle and no
-// inference is billed.
+// Topics are launched with no seed prompt where possible, so the session comes up
+// idle and little or no inference is billed.
+//
+// WHAT THESE LEAVE BEHIND, unavoidably: every launch registers a Remote Control
+// session in the account's cloud, and those are not deletable from the CLI. Teardown
+// removes the local side completely — tmux sessions, transcripts, registry entries —
+// but a "ZZ Test …" entry stays visible in the Claude UI until you delete it there.
+// That is the same ghosting described in the README: RC names live in the cloud, not
+// on disk. It is why the live tier is opt-in rather than part of a routine `go test`:
+// run it when you are changing session handling, not on every save.
 
 // liveEnv is an env whose config dir is a REAL profile, with a sandboxed registry.
 func liveEnv(t *testing.T) *env {
