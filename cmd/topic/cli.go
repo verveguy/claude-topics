@@ -65,6 +65,9 @@ what makes hand-off possible.
                               next launch registers a fresh one — under the current
                               profile's account, named after the topic.
 
+  topic cycle down | up       Take every profile's topics down cleanly, and bring
+                              them back — agents included. Two verbs, because the
+                              point is what you do in between (log in/out, upgrade).
   topic ensure-dispatcher     Start the Dispatcher topic if it is not up.
                               (Run by launchd at login and every 5 minutes.)
 
@@ -174,6 +177,8 @@ func main() {
 	case "fork":
 		err = cmdFork(withProfile(args))
 
+	case "cycle":
+		err = cmdCycle(args)
 	case "ensure-dispatcher":
 		err = cmdEnsureDispatcher([]string{p.dispatcher, p.configDir, p.topicsRoot})
 

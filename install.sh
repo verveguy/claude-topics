@@ -79,12 +79,14 @@ else
   echo "go not found on PATH — needed to build bin/topic" >&2; exit 1
 fi
 
+# topics-cycle became `topic cycle`; clear the stale symlink so it cannot shadow it.
+[[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed the old $BIN/topics-cycle (now: topic cycle)"; }
+
 echo "Installing from $REPO"
 say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
 link "$REPO/bin/topic"          "$BIN/topic"
 
-link "$REPO/bin/topics-cycle" "$BIN/topics-cycle"
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
 # The plist cannot be a symlink to a template — launchd needs the real paths

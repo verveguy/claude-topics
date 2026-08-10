@@ -128,38 +128,6 @@ func cmdPushFork(args []string) error {
 	return save(args[0], m)
 }
 
-// relink repoints lineage after a rename, so `fork` references never dangle. Prints
-// the topic's name when it changed something, and nothing when it did not.
-func cmdRelink(args []string) error {
-	need(args, 3, "relink <file> <old> <new>")
-	path, old, new := args[0], args[1], args[2]
-	m := load(path)
-	hit := false
-	if scalar(m["forkedFrom"]) == old {
-		m["forkedFrom"] = new
-		hit = true
-	}
-	if forks, ok := m["forks"].([]any); ok {
-		for i, f := range forks {
-			if scalar(f) == old {
-				forks[i] = new
-				hit = true
-			}
-		}
-		if hit {
-			m["forks"] = forks
-		}
-	}
-	if !hit {
-		return nil
-	}
-	if err := save(path, m); err != nil {
-		return err
-	}
-	fmt.Println(scalar(m["name"]))
-	return nil
-}
-
 func cmdStatus(args []string) error {
 	need(args, 1, "status <file>")
 	m := load(args[0])
@@ -182,51 +150,12 @@ func cmdStatus(args []string) error {
 	return nil
 }
 
-// sessionIDs lists every session this topic can still resume: the current one and
-// every retired one. Order matters — the current session is first.
-func cmdSessionIDs(args []string) error {
-	need(args, 1, "session-ids <file>")
-	m := load(args[0])
-	seen := map[string]bool{}
-	emit := func(s string) {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			fmt.Println(s)
-		}
-	}
-	emit(scalar(m["sessionId"]))
-	if h, ok := m["history"].([]any); ok {
-		for _, e := range h {
-			if em, ok := e.(map[string]any); ok {
-				emit(scalar(em["sessionId"]))
-			}
-		}
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------- profile configs
 
 func projectEntry(cfg map[string]any, dir string) map[string]any {
 	projects, _ := cfg["projects"].(map[string]any)
 	entry, _ := projects[dir].(map[string]any)
 	return entry
-}
-
-func cmdProjectFlag(args []string) error {
-	need(args, 3, "project-flag <config-file> <work-dir> <key>")
-	fmt.Println(scalar(projectEntry(load(args[0]), args[1])[args[2]]))
-	return nil
-}
-
-// onboarded reports through its exit status, since that is how the shell asks.
-func cmdOnboarded(args []string) error {
-	need(args, 1, "onboarded <config-file>")
-	if load(args[0])["hasCompletedOnboarding"] == true {
-		os.Exit(0)
-	}
-	os.Exit(1)
-	return nil
 }
 
 // carryApprovals copies the user's own prior answers for one directory. Limited on
@@ -351,51 +280,6 @@ func cmdTranscriptTitle(args []string) error {
 	need(args, 1, "transcript-title <transcript>")
 	_, title := scanTranscript(args[0])
 	fmt.Println(title)
-	return nil
-}
-
-// stripBridge removes the bridge-session records so the next launch mints a fresh
-// Remote Control identity. Prints the bridge it dropped, or nothing if there was none.
-func cmdStripBridge(args []string) error {
-	need(args, 1, "strip-bridge <transcript>")
-	path := args[0]
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	var kept []string
-	last := ""
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.Contains(line, `"bridge-session"`) {
-			var rec map[string]any
-			if json.Unmarshal([]byte(line), &rec) == nil && scalar(rec["type"]) == "bridge-session" {
-				if id := scalar(rec["bridgeSessionId"]); id != "" {
-					last = id
-				}
-				continue
-			}
-		}
-		kept = append(kept, line)
-	}
-	f.Close()
-	if last == "" {
-		return nil // nothing to strip; leave the file untouched
-	}
-	tmp := path + ".tmp"
-	out := strings.Join(kept, "\n")
-	if out != "" {
-		out += "\n"
-	}
-	if err := os.WriteFile(tmp, []byte(out), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	fmt.Println(last)
 	return nil
 }
 

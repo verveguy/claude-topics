@@ -3,12 +3,11 @@
 Pick up, put down, and hand off long-running Claude Code work — from anywhere,
 including your phone.
 
-Two scripts plus a Claude Code plugin:
+One Go binary plus a Claude Code plugin:
 
 | Piece | What it is |
 |-------|------------|
 | `topic` | Manage **topics**: stable names that outlive the session beneath them |
-| `topics-cycle` | Take every profile's topics down cleanly, and bring them back |
 | `topics` plugin | Skills (`handoff`, `fork`, `topic-manage`) so Claude knows the procedures |
 
 ## The problem this solves
@@ -267,26 +266,26 @@ Three things make profile separation safe rather than merely possible:
   `~/.claude`.** They are not equivalent: unset reads `~/.claude.json`, set reads
   `~/.claude/.claude.json` — a different file that has never completed onboarding, so
   the session comes up at the first-run theme picker and `topic` hangs waiting for a
-  readiness marker that never arrives. `topic`, `topics-cycle` and `install.sh` all
+  readiness marker that never arrives. `topic`, `topic cycle` and `install.sh` all
   special-case this.
 
 `topic list` prints the profile whenever it is not the default, so a short list
 cannot be mistaken for missing topics.
 
-### Cycling everything — `topics-cycle`
+### Cycling everything — `topic cycle`
 
 To log a profile in or out, rotate credentials, or upgrade Claude Code, you want
 everything down and then back. Two commands, because the point is what you do in
 between:
 
 ```bash
-topics-cycle down          # unload agents, put every topic in every profile down
+topic cycle down           # unload agents, put every topic in every profile down
 # ...log each profile in from a plain session in ~ , check /status...
-topics-cycle up            # reload agents, start each profile's Dispatcher
+topic cycle up             # reload agents, start each profile's Dispatcher
 topic up "<name>"          # pick topics back up as you want them
 ```
 
-Both take `--dry-run`. `topics-cycle profiles` lists what it will act on — the
+Both take `--dry-run`. `topic cycle profiles` lists what it will act on — the
 installed Dispatcher plists *are* that list, since each names the profile it manages,
 so there is no second list to keep in sync.
 
@@ -486,7 +485,7 @@ Two tiers:
 
 Coverage is 17 of 18 commands (all but `ensure-dispatcher`, which launches the
 Dispatcher on the developer's own machine) and every flag that changes behaviour
-rather than wording. `topics-cycle`'s `down`/`up` are deliberately untested: they
+rather than wording. `topic cycle`'s `down`/`up` are deliberately untested: they
 unload launchd agents, so a test run would stop the real Dispatchers.
 
 ## Implementation
@@ -516,7 +515,6 @@ binary in place if compilation fails.
 
 ```
 cmd/topic/                 the tool itself, in Go (built to bin/topic)
-bin/topics-cycle           take everything down / bring it back, across profiles
 test/                      Go tests driving the CLI as a black box
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics
   skills/handoff/          how to hand a topic to a fresh session

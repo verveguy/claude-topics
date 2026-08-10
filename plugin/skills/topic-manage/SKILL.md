@@ -144,7 +144,7 @@ A topic's name lives in five places: the registry, the tmux session, the peer na
 ## Shutting everything down
 
 `topic down-all` puts every live topic in the current profile down, skipping the
-calling session. `topics-cycle down` / `topics-cycle up` does it across every profile
+calling session. `topic cycle down` / `topic cycle up` does it across every profile
 and handles the launchd agents, which otherwise restart Dispatchers underneath you.
 Both are lossless and both take `--dry-run`; show the user the dry run first.
 
