@@ -1,0 +1,27 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-topics",
+  "description": "The claude-topics marketplace — procedures for picking up, putting down, forking and handing off long-running Claude Code work, across machines and Claude Code profiles.",
+  "owner": {
+    "name": "verveguy",
+    "url": "https://github.com/verveguy/claude-topics"
+  },
+  "plugins": [
+    {
+      "name": "topics",
+      "description": "Pick up, put down, fork, rename and hand off long-running Claude Code topics — a topic being a stable name that outlives the session beneath it, so work survives being resumed, set aside, split in two, moved between profiles, or handed to a fresh session. Teaches Claude the procedures; the `topic` CLI does the work.",
+      "category": "workflow",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/verveguy/claude-topics.git",
+        "path": "plugin",
+        "ref": "main"
+      },
+      "homepage": "https://github.com/verveguy/claude-topics",
+      "author": {
+        "name": "verveguy",
+        "url": "https://github.com/verveguy"
+      }
+    }
+  ]
+}

@@ -1,8 +1,17 @@
 {
   "name": "topics",
-  "version": "0.2.0",
-  "description": "Pick up, put down, hand off, and fork long-running Claude Code topics. A topic is a stable name that outlives the session beneath it, so work can be resumed, set aside, split into a new topic, or handed to a fresh session without losing the salient context. Wraps the `topic` CLI.",
+  "version": "0.3.0",
+  "description": "Pick up, put down, fork, rename and hand off long-running Claude Code topics. A topic is a stable name that outlives the session beneath it, so work can be resumed, set aside, split into two, moved between Claude Code profiles, or handed to a fresh session without losing the salient context. Wraps the `topic` CLI.",
   "author": {
-    "name": "Brett Adam"
-  }
+    "name": "Brett Adam",
+    "url": "https://github.com/verveguy"
+  },
+  "homepage": "https://github.com/verveguy/claude-topics",
+  "keywords": [
+    "sessions",
+    "tmux",
+    "remote-control",
+    "handoff",
+    "workflow"
+  ]
 }

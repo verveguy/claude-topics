@@ -31,13 +31,34 @@ cd ~/dev/claude-topics
 ./install.sh
 ```
 
-Everything installs as a **symlink back into the repo**, so editing a script here
-takes effect immediately. Requires `tmux`, `claude`, `go`, and `~/.local/bin` on your
-`PATH`. `install.sh` builds `bin/topic-core` before linking; re-run it after
-changing anything under `cmd/`.
+`install.sh` builds `bin/topic` and symlinks it, the plugin and a launchd agent into
+place — the plugin as a **symlink back into the repo**, so editing a skill takes
+effect immediately. Re-run it after changing anything under `cmd/`. Requires `tmux`,
+`claude`, `go`, and `~/.local/bin` on your `PATH`.
+
+To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
+```
 
 `./install.sh --uninstall` removes the links and the launchd agent. It deliberately
-leaves `~/.claude/topics/` alone — that's your registry and handoff docs, not the tool.
+leaves `<profile>/topics/` alone — that's your registry, handoff docs and briefs, not
+the tool.
+
+### The plugin on its own
+
+The skills are also published as a plugin marketplace in this repo, so Claude can be
+taught the procedures without installing the CLI from source:
+
+```bash
+claude plugin marketplace add verveguy/claude-topics
+claude plugin install topics@claude-topics
+```
+
+The skills drive the `topic` CLI, so they are only useful alongside it — but the
+marketplace is the tidy way to get them into a profile, and `install.sh` remains the
+way to get the binary.
 
 ## `topic` — the tool
 
@@ -456,6 +477,10 @@ Learned the hard way; don't re-derive them.
   active`). Claude Code's startup text has changed twice already — suspect this first
   if launches hang for the full timeout.
 
+`topic` also carries a few low-level helpers used for debugging — `get`, `set`,
+`sessions`, `find-titled`, `transcript-title`, `transcript-cwd`. They read and write
+the same state the commands above do, and are not part of the supported surface.
+
 ## Tests
 
 ```bash
@@ -514,6 +539,7 @@ binary in place if compilation fails.
 ## Layout
 
 ```
+.claude-plugin/            marketplace manifest, so the plugin is installable
 cmd/topic/                 the tool itself, in Go (built to bin/topic)
 test/                      Go tests driving the CLI as a black box
 plugin/                    the `topics` Claude Code plugin -> ~/.claude/skills/topics

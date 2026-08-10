@@ -9,7 +9,8 @@ A **topic** is a stable name that outlives the Claude session beneath it. The us
 picks topics up and puts them down — often from their phone while travelling —
 without accumulating week-old cluttered context.
 
-Backed by `~/.local/bin/topic`. Run `topic --help` for the full surface.
+Backed by the `topic` CLI (a Go binary, installed at `~/.local/bin/topic`). Run
+`topic --help` for the full surface; every command below is part of it.
 
 ## Core verbs
 
