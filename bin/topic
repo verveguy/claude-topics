@@ -639,46 +639,7 @@ cmd_handoff_swap() {
 # Unregister a topic. Handoff docs are KEPT by default — they are often the only
 # surviving record of what a topic was about, and "stop tracking this" should not
 # mean "destroy the history". --purge removes them too.
-cmd_forget() {
-  local name="" purge=0 dead=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --purge) purge=1; shift ;;
-      --dead)  dead=1; shift ;;   # internal: set by `prune`, suppresses the
-      *) name="$1"; shift ;;      # "still resumable" line for a dead session
-    esac
-  done
-  [[ -n "$name" ]] || die "usage: topic forget \"<name>\" [--purge]"
-
-  local d; d="$(topic_dir "$name")"
-  [[ -f "$d/topic.json" ]] || die "no such topic: \"$name\""
-  is_up "$name" && die "\"$name\" is still up — \`topic down \"$name\"\` first"
-  [[ "$(reg_read "$name" state)" == "adopted" ]] &&
-    echo "note: \"$name\" was adopted; its original session may still be running." >&2
-
-  local sid n
-  sid="$(reg_read "$name" sessionId)"
-  # An absent handoffs dir makes the lister exit non-zero, and `pipefail` + `set -e`
-  # would turn that into a silent abort BEFORE anything is deleted — `topic forget`
-  # did exactly that for every topic with no handoff docs. The trailing `|| true`
-  # is what actually fixes it; the count still comes through.
-  n="$(find "$d/handoffs" "$d/briefs" -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ' || true)"
-  [[ -n "$n" ]] || n=0
-
-  if [[ $purge -eq 1 ]]; then
-    rm -rf "$d"
-    echo "Forgot \"$name\" and purged $n document(s)."
-  else
-    rm -f "$d/topic.json"
-    rmdir "$d" 2>/dev/null || true   # succeeds only if nothing else remains
-    echo "Forgot \"$name\"."
-    [[ "$n" -gt 0 ]] && echo "  Kept $n document(s) in $d/ (--purge to remove)."
-  fi
-  # The session itself is untouched and still resumable directly — unless `prune`
-  # already established that its transcript is gone.
-  [[ -n "$sid" && $dead -eq 0 ]] && echo "  Session $sid is untouched: claude --resume $sid"
-  return 0
-}
+cmd_forget()   { core forget "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Path to a session's transcript, or "" if it no longer exists. A topic whose
 # transcript is gone cannot be --resume'd: it is dead, not merely put down.
@@ -699,52 +660,7 @@ cwd_of() {
 # Dry-run by default: nothing is deleted until --yes.
 #
 #   topic prune [--yes] [--purge]
-cmd_prune() {
-  local yes=0 purge=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --yes|-y) yes=1; shift ;;
-      --purge)  purge=1; shift ;;
-      *) die "prune: unexpected argument: $1" ;;
-    esac
-  done
-
-  mkdir -p "$TOPICS_ROOT"
-  local dead=() d name sid
-  for d in "$TOPICS_ROOT"/*/; do
-    [[ -f "$d/topic.json" ]] || continue
-    name="$(registry get "$d/topic.json" name)"
-    [[ -n "$name" ]] || continue
-    is_up "$name" && continue
-    sid="$(reg_read "$name" sessionId)"
-    # No sessionId at all also counts as dead: nothing to resume.
-    [[ -z "$sid" || -z "$(transcript_of "$sid")" ]] && dead+=("$name")
-  done
-
-  if [[ ${#dead[@]} -eq 0 ]]; then
-    echo "Nothing to prune — every down topic still has a resumable transcript."
-    return 0
-  fi
-
-  echo "Dead topics (down, transcript gone — not resumable):"
-  for name in "${dead[@]}"; do
-    sid="$(reg_read "$name" sessionId)"
-    printf '  %-30s %s\n' "$name" "${sid:-<no session>}"
-  done
-
-  if [[ $yes -eq 0 ]]; then
-    echo ""
-    local extra=""; [[ $purge -eq 1 ]] && extra=" --purge"
-    echo "Dry run. To remove: topic prune --yes$extra"
-    echo "  (handoff docs are kept unless --purge)"
-    return 0
-  fi
-
-  echo ""
-  for name in "${dead[@]}"; do
-    if [[ $purge -eq 1 ]]; then cmd_forget "$name" --dead --purge; else cmd_forget "$name" --dead; fi
-  done
-}
+cmd_prune()    { core prune "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Every LIVE session writes ~/.claude/sessions/<pid>.json holding the authoritative
 # name -> sessionId -> cwd mapping. Records are NOT removed when a session exits,
@@ -1345,73 +1261,7 @@ drop_bridge_records() {
 #
 # Editing a transcript is unsupported, so the original is copied to
 # <topic>/backups/ first.
-cmd_rebridge() {
-  local name="" all=0 dry=0 down_only=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --all)       all=1; shift ;;
-      --down-only) down_only=1; shift ;;   # leave running sessions undisturbed
-      --dry-run)   dry=1; shift ;;
-      *) name="$1"; shift ;;
-    esac
-  done
-  [[ -n "$name" || $all -eq 1 ]] || die "usage: topic rebridge \"<name>\"|--all [--dry-run]"
-
-  local self; self="$(cmd_whoami 2>/dev/null)" || self=""
-  local targets=() d n
-  if [[ $all -eq 1 ]]; then
-    for d in "$TOPICS_ROOT"/*/; do
-      [[ -f "$d/topic.json" ]] || continue
-      n="$(registry get "$d/topic.json" name)"
-      [[ -n "$n" ]] || continue
-      if [[ -n "$self" && "$n" == "$self" ]]; then
-        echo "  skipping \"$n\" — it is the session running this command"
-        continue
-      fi
-      # --down-only: a live session would have to be restarted to re-register, and
-      # a down one re-registers for free on its next pickup.
-      if [[ $down_only -eq 1 ]] && is_up "$n"; then continue; fi
-      targets+=("$n")
-    done
-  else
-    [[ -z "$self" || "$name" != "$self" ]] ||
-      die "rebridge: \"$name\" is the session running this command — run it from another session"
-    targets+=("$name")
-  fi
-
-  local t sid tr old was_up
-  for t in "${targets[@]}"; do
-    sid="$(reg_read "$t" sessionId)"
-    if [[ -z "$sid" ]]; then echo "  $t: no session — skipping"; continue; fi
-    tr="$(transcript_of "$sid")"
-    if [[ -z "$tr" ]]; then echo "  $t: no transcript in this profile — skipping"; continue; fi
-
-    old="$(grep -o '"bridgeSessionId":"[^"]*"' "$tr" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"
-    if [[ -z "$old" ]]; then echo "  $t: no bridge session recorded — nothing to do"; continue; fi
-
-    was_up=0; is_up "$t" && was_up=1
-    if [[ $dry -eq 1 ]]; then
-      echo "  $t: would drop bridge ${old:0:16}…$([[ $was_up -eq 1 ]] && echo ' (restart needed)')"
-      continue
-    fi
-
-    printf '  %s: bridge %s… -> ' "$t" "${old:0:16}"
-    if [[ $was_up -eq 1 ]]; then
-      cmd_down "$t" >/dev/null 2>&1
-      settle "$tr"
-    fi
-
-    drop_bridge_records "$tr" "$(topic_dir "$t")/backups" >/dev/null
-
-    if [[ $was_up -eq 1 ]]; then
-      cmd_up "$t" >/dev/null 2>&1 || true
-      local new; new="$(grep -o '"bridgeSessionId":"[^"]*"' "$tr" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"
-      echo "${new:0:16}… (restarted)"
-    else
-      echo "cleared (next \`topic up\` mints a fresh one)"
-    fi
-  done
-}
+cmd_rebridge() { core rebridge "$@" "$CLAUDE_DIR" "$TOPICS_ROOT"; }
 
 # Rename a topic everywhere it is named. A topic's name appears in five places and
 # they drift apart easily — /rename in the Claude UI, for instance, changes only the

@@ -51,6 +51,12 @@ func main() {
 		err = cmdStatusCmd(args)
 	case "profiles":
 		err = cmdProfiles(args)
+	case "forget":
+		err = cmdForget(args)
+	case "prune":
+		err = cmdPrune(args)
+	case "rebridge":
+		err = cmdRebridge(args)
 	case "session-ids":
 		err = cmdSessionIDs(args)
 	case "project-flag":
