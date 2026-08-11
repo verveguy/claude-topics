@@ -42,6 +42,38 @@ func copyTree(src, dst string) error {
 	})
 }
 
+// moveDir relocates a topic's directory, merging into whatever is already at the
+// destination. A plain rename fails when a non-empty directory is in the way, and one
+// routinely is: asking `handoff-path` where to write a document creates <slug>/handoffs
+// under the new name before the topic exists.
+func moveDir(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		from, to := filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())
+		if err := os.Rename(from, to); err != nil {
+			// Occupied, or across filesystems: fall back to copying.
+			if e.IsDir() {
+				if err := copyTree(from, to); err != nil {
+					return err
+				}
+			} else if err := copyFile(from, to); err != nil {
+				return err
+			}
+			os.RemoveAll(from)
+		}
+	}
+	return os.RemoveAll(src)
+}
+
 // resolveProfile turns "work" into ~/.claude-work, "default" into ~/.claude, and
 // leaves an absolute path alone.
 func resolveProfile(s string) string {
@@ -118,7 +150,10 @@ func cmdMove(args []string) error {
 		return fmt.Errorf("no such topic in this profile: %q", name)
 	}
 	dstDir := filepath.Join(dst, "topics", slugify(name))
-	if _, err := os.Stat(dstDir); err == nil {
+	// A directory is not a topic: handoff-path and fork-path create <slug>/handoffs
+	// and <slug>/briefs merely to answer "where does the document go". Only a
+	// topic.json means the name is taken.
+	if fileExists(filepath.Join(dstDir, "topic.json")) {
 		return fmt.Errorf("move: %q already exists in %s (%s)", name, dst, dstDir)
 	}
 
@@ -274,11 +309,8 @@ func cmdMove(args []string) error {
 		if err := copyTree(srcDir, dstDir); err != nil {
 			return err
 		}
-	} else if err := os.Rename(srcDir, dstDir); err != nil {
-		if err := copyTree(srcDir, dstDir); err != nil {
-			return err
-		}
-		os.RemoveAll(srcDir)
+	} else if err := moveDir(srcDir, dstDir); err != nil {
+		return err
 	}
 
 	// Record where it came from: after a move the old profile has no trace of it.
@@ -402,10 +434,8 @@ func cmdRename(args []string) error {
 	if !fileExists(filepath.Join(oldDir, "topic.json")) {
 		return fmt.Errorf("no such topic in this profile: %q", old)
 	}
-	if oldDir != newDir {
-		if _, err := os.Stat(newDir); err == nil {
-			return fmt.Errorf("rename: %q already exists in this profile (%s)", newName, newDir)
-		}
+	if oldDir != newDir && fileExists(filepath.Join(newDir, "topic.json")) {
+		return fmt.Errorf("rename: %q already exists in this profile (%s)", newName, newDir)
 	}
 	if self := whoami(topicsRoot, configDir); self != "" && self == old {
 		return fmt.Errorf("rename: %q is the session running this command — run it from another session", old)
@@ -451,7 +481,7 @@ func cmdRename(args []string) error {
 		if err := os.MkdirAll(filepath.Dir(newDir), 0o755); err != nil {
 			return err
 		}
-		if err := os.Rename(oldDir, newDir); err != nil {
+		if err := moveDir(oldDir, newDir); err != nil {
 			return err
 		}
 	}

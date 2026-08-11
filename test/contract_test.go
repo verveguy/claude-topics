@@ -292,3 +292,51 @@ func TestProfilesReportsTheActiveProfile(t *testing.T) {
 	r := e.mustRun("profiles")
 	mustContain(t, r.out(), "* = active", "should explain its own marker")
 }
+
+// Asking `handoff-path` or `fork-path` where a document goes creates <slug>/handoffs
+// or <slug>/briefs before any topic exists. That scaffold must not reserve the name:
+// it once made `rename` refuse — from the Dispatcher, on behalf of a session that had
+// just asked for its own future handoff path.
+func TestScaffoldDirectoryDoesNotReserveAName(t *testing.T) {
+	e := newEnv(t)
+	e.seedTopic(slug("Old Name"), map[string]any{
+		"name": "Old Name", "dir": "/tmp", "sessionId": "sid-scaffold",
+	})
+	// Exactly what `topic handoff-path "New Name"` leaves behind.
+	e.mustRun("handoff-path", "New Name")
+
+	e.mustRun("rename", "Old Name", "New Name")
+
+	if got := e.readTopic(slug("New Name"))["name"]; got != "New Name" {
+		t.Errorf("name = %v, want \"New Name\"", got)
+	}
+	if e.exists(slug("Old Name"), "topic.json") {
+		t.Error("the old registry entry survived the rename")
+	}
+	if !e.exists(slug("New Name"), "handoffs") {
+		t.Error("the scaffolded handoffs/ directory was lost in the merge")
+	}
+}
+
+func TestMoveIntoAScaffoldDirectory(t *testing.T) {
+	e := newEnv(t)
+	const sid = "sid-move-scaffold"
+	e.seedTopic(slug("Mover Two"), map[string]any{
+		"name": "Mover Two", "dir": "/tmp", "sessionId": sid,
+	})
+	e.seedTranscript("-tmp", sid, []string{`{"type":"user","cwd":"/tmp"}`})
+	dst := e.newProfile("dest")
+	// A scaffold in the DESTINATION profile, as handoff-path would leave.
+	mkdirAll(t, filepath.Join(dst, "topics", slug("Mover Two"), "handoffs"))
+
+	e.mustRun("move", "Mover Two", "--to", dst)
+
+	var moved map[string]any
+	readJSON(t, filepath.Join(dst, "topics", slug("Mover Two"), "topic.json"), &moved)
+	if moved["name"] != "Mover Two" {
+		t.Errorf("name = %v", moved["name"])
+	}
+	if e.exists(slug("Mover Two"), "topic.json") {
+		t.Error("source registry entry survived the move")
+	}
+}
