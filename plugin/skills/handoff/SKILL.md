@@ -74,11 +74,13 @@ You ask the target session to write its own handoff doc, wait for it, then swap.
    ```bash
    topic handoff-swap "<topic>"
    ```
-   This retires your session, archives its UUID in the topic's history, and starts a
-   fresh session under the same name seeded with the doc.
+   Run from inside the topic being swapped, this **returns immediately** and schedules
+   the work: a detached process retires your session a few seconds later, archives its
+   UUID in the topic's history, and starts a fresh session under the same name seeded
+   with the doc. The command cannot wait for that, because it is what ends you.
 
-5. Tell the user the swap is done and that the new session is up under the same name.
-   **Your session is terminated by step 4** — say what you need to say before running it.
+5. **Say your goodbye in the same turn.** You have a few seconds. Tell the user the
+   swap is scheduled and that a fresh session will come up under the same name.
 
 ## Case B: handing off another topic
 

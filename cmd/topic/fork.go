@@ -3,9 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"syscall"
+	"time"
 )
 
 // fork and handoff-swap: the two commands that create a session from a document.
@@ -13,6 +16,34 @@ import (
 // They differ in what the document is for. A handoff doc looks BACK over a topic's own
 // history and is read by its successor; a fork brief looks FORWARD and is read by a
 // session that has never existed, about a thread it has never seen.
+
+// detachedFlag marks the re-executed half of a swap. Internal: a user passing it by
+// hand would only be asking for the behaviour they already get.
+const detachedFlag = "--_detached"
+
+// detachSwap re-runs this command in a new session and process group, so killing the
+// caller's tmux pane cannot take it with us. It waits a moment before acting, giving
+// the caller time to return its tool result and say goodbye.
+func detachSwap(name, doc, focus, configDir, topicsRoot string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	args := []string{"handoff-swap", name, doc, detachedFlag}
+	if focus != "" {
+		args = append(args, "--focus", focus)
+	}
+	cmd := exec.Command(self, args...)
+	cmd.Env = append(os.Environ(), "CLAUDE_TOPICS_ROOT="+topicsRoot)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// The detached half logs where a human can find it if a swap ever goes wrong.
+	if f, err := os.OpenFile(filepath.Join(topicDir(topicsRoot, name), "swap.log"),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		fmt.Fprintf(f, "\n=== %s: detached swap for %q\n", nowISO(), name)
+		cmd.Stdout, cmd.Stderr = f, f
+	}
+	return cmd.Start()
+}
 
 // newestDoc returns the most recent .md in a topic's subdirectory, or "".
 func newestDoc(topicsRoot, name, kind string) string {
@@ -162,8 +193,13 @@ func cmdFork(args []string) error {
 // emergency — and starts a fresh one under the same topic name, seeded with the doc.
 func cmdHandoffSwap(args []string) error {
 	var focus string
+	detached := false
 	var positional []string
 	for i := 0; i < len(args); i++ {
+		if args[i] == detachedFlag {
+			detached = true
+			continue
+		}
 		if args[i] == "--focus" {
 			if i+1 < len(args) {
 				i++
@@ -202,6 +238,27 @@ func cmdHandoffSwap(args []string) error {
 	gen := 1
 	if g, err := strconv.Atoi(regGet(topicsRoot, name, "generation")); err == nil && g > 0 {
 		gen = g
+	}
+
+	// A swap run from INSIDE its own topic kills the session that is waiting on it:
+	// the tool call can never return, and the work depends on an orphaned process
+	// outliving its parent. Detach instead, so the call completes cleanly and the
+	// swap is carried out by something the dying session does not own.
+	if !detached && whoami(topicsRoot, configDir) == name {
+		if err := detachSwap(name, doc, focus, configDir, topicsRoot); err != nil {
+			return err
+		}
+		fmt.Printf("Handing off %q (generation %d -> %d) — scheduled.\n", name, gen, gen+1)
+		fmt.Printf("  handoff doc: %s\n", doc)
+		fmt.Println("  This session is about to be retired and replaced by a fresh one under")
+		fmt.Println("  the same name. Say anything you still need to say now.")
+		return nil
+	}
+
+	// Give the caller time to return its tool result and say goodbye before we pull
+	// the session out from under it.
+	if detached {
+		time.Sleep(6 * time.Second)
 	}
 
 	fmt.Printf("Handing off %q (generation %d -> %d)\n", name, gen, gen+1)

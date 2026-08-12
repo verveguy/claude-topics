@@ -92,6 +92,12 @@ topic handoff-swap "<name>" --focus "the thing to pick up first"
 In practice you don't run these by hand — you say `/handoff` (or
 `/handoff <focus>`) and the `handoff` skill drives it.
 
+Only the session itself can write its handoff doc, so step 2 has to happen inside it —
+but step 3 is what *ends* that session, and a command cannot wait for a result it will
+never live to receive. Run from inside its own topic, `handoff-swap` therefore returns
+at once and detaches: a separate process retires the session moments later and brings
+the successor up. Run from anywhere else it behaves normally.
+
 `--focus` scopes what the successor starts on. Off-focus work is still recorded as
 open threads, so nothing is silently dropped: an omitted thread is indistinguishable
 from a finished one.
