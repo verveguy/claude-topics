@@ -17,10 +17,15 @@ import (
 // look when a launch misbehaves — suspect this first.
 
 var startupPatterns = struct {
-	trust, ready, onboarding, externalImports *regexp.Regexp
+	trust, trustAccept, ready, onboarding, externalImports *regexp.Regexp
 }{
 	// Auto-accepted: the workspace trust prompt.
 	trust: regexp.MustCompile(`trust this folder`),
+	// The option to select once it appears. It is NOT reliably the default one: when
+	// the folder pre-approves tool permissions in settings.json, Claude Code shows a
+	// sterner variant of the dialog whose pre-selected option is "No, exit". Pressing
+	// Enter blind — which this code used to do — then declines and quits.
+	trustAccept: regexp.MustCompile(`(?i)Yes, I trust|Yes, proceed`),
 	// The session is usable.
 	ready: regexp.MustCompile(`(?i)Welcome back|remote-control is active`),
 	// First-run setup — a theme and an account are the user's choices, not ours.
@@ -40,6 +45,111 @@ func capturePane(target string) string {
 }
 
 func killSession(target string) { _ = tmuxRun("kill-session", "-t", "="+target) }
+
+func sessionExists(target string) bool { return tmuxRun("has-session", "-t", "="+target) == nil }
+
+// Claude Code renames its own process to its version string ("2.1.251"), so a pane
+// running Claude cannot be recognised by looking for "claude" in the command name.
+// Recognise the opposite instead: a pane whose foreground command is a shell has
+// nothing running in it.
+var shellCommands = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true,
+	"ksh": true, "csh": true, "tcsh": true, "dash": true,
+}
+
+// paneRunningClaude reports whether anything is still running inside the session's
+// panes. launchSession deliberately leaves the shell alive when Claude exits, so this
+// is what separates a live topic from the husk left behind by one that quit.
+func paneRunningClaude(target string) bool {
+	out, err := exec.Command("tmux", "list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		c := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "-"))
+		if c != "" && !shellCommands[c] {
+			return true
+		}
+	}
+	return false
+}
+
+// menuCursorPrefixes are the glyphs Claude Code has used to mark the selected line of
+// an on-screen menu.
+var menuCursorPrefixes = []string{"\u276f", "\u203a", ">"}
+
+func isMenuCursorLine(l string) bool {
+	t := strings.TrimSpace(l)
+	for _, p := range menuCursorPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// selectMenuOption moves the cursor of an on-screen menu onto the line matching want
+// and confirms it, rather than trusting want to be the default selection. It verifies
+// the cursor actually landed before pressing Enter: on this particular dialog the
+// wrong line means "No, exit", so a blind confirm is worse than giving up.
+func selectMenuOption(target, pane string, want *regexp.Regexp) error {
+	find := func(pane string) (cursor, wanted int) {
+		cursor, wanted = -1, -1
+		lines := strings.Split(pane, "\n")
+		for i, l := range lines {
+			if want.MatchString(l) {
+				wanted = i
+			}
+		}
+		if wanted < 0 {
+			return -1, -1
+		}
+		// A ready session paints its own input prompt with the same glyph, so prefer
+		// the cursor nearest the option we are aiming at.
+		for i, l := range lines {
+			if !isMenuCursorLine(l) {
+				continue
+			}
+			if cursor < 0 || abs(i-wanted) < abs(cursor-wanted) {
+				cursor = i
+			}
+		}
+		return cursor, wanted
+	}
+
+	cursor, wanted := find(pane)
+	if wanted < 0 {
+		return fmt.Errorf("no option matching %s on screen", want)
+	}
+	if cursor < 0 {
+		return fmt.Errorf("could not find the menu cursor on screen")
+	}
+
+	key, steps := "Down", wanted-cursor
+	if steps < 0 {
+		key, steps = "Up", -steps
+	}
+	for range steps {
+		_ = tmuxRun("send-keys", "-t", target, key)
+		time.Sleep(120 * time.Millisecond)
+	}
+	time.Sleep(250 * time.Millisecond)
+
+	// Confirm the cursor is where we think it is before committing.
+	pane = capturePane(target)
+	cursor, wanted = find(pane)
+	if wanted < 0 || cursor != wanted {
+		return fmt.Errorf("could not move the selection onto %s", want)
+	}
+	return tmuxRun("send-keys", "-t", target, "Enter")
+}
+
+func abs(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
+}
 
 // shellQuote renders an argument safe to send through tmux send-keys, which hands the
 // string to a shell.
@@ -78,9 +188,10 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 	// Pin the profile onto the command itself: a detached tmux session does NOT
 	// reliably inherit our environment (the tmux server may long predate us), and a
 	// session launched under the wrong profile writes its transcript somewhere this
-	// tool cannot see. Only for non-default profiles — CLAUDE_CONFIG_DIR=~/.claude is
-	// not the same as leaving it unset.
-	cmd := "claude"
+	// tool cannot see. The default profile is pinned too, by UNSETTING the variable:
+	// "default" means absent, not ~/.claude, and the tmux server's own environment may
+	// carry a stale CLAUDE_CONFIG_DIR from whichever profile happened to start it.
+	cmd := "env -u CLAUDE_CONFIG_DIR claude"
 	if tag != "" {
 		cmd = "CLAUDE_CONFIG_DIR=" + shellQuote(configDir) + " claude"
 	}
@@ -88,6 +199,12 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		cmd += " " + shellQuote(a)
 	}
 
+	// isUp reports a pane sitting at its shell prompt as down, so we may be relaunching
+	// over the husk of a session that quit. tmux refuses to reuse the name; the husk is
+	// an empty shell, so there is nothing to lose by clearing it.
+	if sessionExists(tn) {
+		killSession(tn)
+	}
 	if err := tmuxRun("new-session", "-d", "-s", tn, "-c", dir); err != nil {
 		return fmt.Errorf("creating tmux session %q: %w", tn, err)
 	}
@@ -105,7 +222,20 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		// unanswered question.
 		if !trusted && startupPatterns.trust.MatchString(pane) {
 			time.Sleep(300 * time.Millisecond)
-			_ = tmuxRun("send-keys", "-t", tn, "Enter")
+			// Re-capture: the dialog may still have been painting when we matched.
+			if err := selectMenuOption(tn, capturePane(tn), startupPatterns.trustAccept); err != nil {
+				killSession(tn)
+				fmt.Println()
+				hint := "(cd " + dir + " && claude)"
+				if tag != "" {
+					hint = "(cd " + dir + " && CLAUDE_CONFIG_DIR=" + configDir + " claude)"
+				}
+				return fmt.Errorf("%q stopped on the workspace trust prompt and topic could not\n"+
+					"  answer it safely: %v.\n"+
+					"  Declining that prompt quits Claude, so topic will not guess. Start it once\n"+
+					"  by hand, answer it, then retry:\n    %s\n  unanswered startup prompt",
+					name, err, hint)
+			}
 			fmt.Print(" (trust accepted)")
 			trusted = true
 			continue
@@ -154,7 +284,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 // — this is just the tidy path.
 func stopSession(configDir, name string) {
 	tn := tmuxName(profileTag(configDir), name)
-	if tmuxRun("has-session", "-t", "="+tn) != nil {
+	if !sessionExists(tn) {
 		return
 	}
 	_ = tmuxRun("send-keys", "-t", tn, "Escape") // interrupt any in-flight turn
@@ -164,8 +294,7 @@ func stopSession(configDir, name string) {
 		if tmuxRun("has-session", "-t", "="+tn) != nil {
 			return
 		}
-		out, _ := exec.Command("tmux", "list-panes", "-t", "="+tn, "-F", "#{pane_current_command}").Output()
-		if !strings.Contains(strings.ToLower(string(out)), "claude") {
+		if !paneRunningClaude(tn) {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)

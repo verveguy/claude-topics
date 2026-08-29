@@ -223,6 +223,13 @@ func cmdDown(args []string) error {
 			fmt.Printf("    topic up %q   # relaunches it under topic management, resuming context\n", name)
 			return nil
 		}
+		// A husk — the tmux session outlived the Claude process inside it. Clear it so
+		// the name is free and `topic list` stops showing a window that does nothing.
+		if sessionExists(tmuxName(profileTag(configDir), name)) {
+			killSession(tmuxName(profileTag(configDir), name))
+			fmt.Printf("%q had already exited; cleared its leftover tmux session.\n", name)
+			return cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()})
+		}
 		fmt.Printf("%q is already down.\n", name)
 		return nil
 	}
