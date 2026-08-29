@@ -48,6 +48,24 @@ func killSession(target string) { _ = tmuxRun("kill-session", "-t", "="+target) 
 
 func sessionExists(target string) bool { return tmuxRun("has-session", "-t", "="+target) == nil }
 
+// hasHusk reports a topic whose tmux session outlived the Claude process inside it.
+// isUp calls a husk down, so every command that acts on "a topic that is not up" has
+// to reckon with one: the husk still holds the tmux name, and once its registry entry
+// is gone nothing can name it to clean it up.
+func hasHusk(tag, name string) bool {
+	tn := tmuxName(tag, name)
+	return sessionExists(tn) && !paneRunningClaude(tn)
+}
+
+// clearHusk removes that leftover session. It is an empty shell, so nothing is lost.
+func clearHusk(tag, name string) bool {
+	if !hasHusk(tag, name) {
+		return false
+	}
+	killSession(tmuxName(tag, name))
+	return true
+}
+
 // Claude Code renames its own process to its version string ("2.1.251"), so a pane
 // running Claude cannot be recognised by looking for "claude" in the command name.
 // Recognise the opposite instead: a pane whose foreground command is a shell has
@@ -199,9 +217,9 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		cmd += " " + shellQuote(a)
 	}
 
-	// isUp reports a pane sitting at its shell prompt as down, so we may be relaunching
-	// over the husk of a session that quit. tmux refuses to reuse the name; the husk is
-	// an empty shell, so there is nothing to lose by clearing it.
+	// We may be relaunching over the husk of a session that quit — tmux refuses to
+	// reuse the name. Kill outright rather than clearHusk: isUp said this topic was
+	// down, so anything still in the pane is not a session we mean to keep.
 	if sessionExists(tn) {
 		killSession(tn)
 	}
