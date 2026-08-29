@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -50,8 +49,13 @@ func tmuxName(tag, name string) string {
 	return prefix + strings.NewReplacer(":", "-", ".", "-").Replace(name)
 }
 
+// isUp means the topic's session is genuinely RUNNING — not merely that its tmux
+// session exists. launchSession leaves the shell alive when Claude exits, so a session
+// that quit (a declined trust prompt, a crash) leaves a husk behind; treating that husk
+// as up had ensure-dispatcher reporting dead Dispatchers as healthy indefinitely.
 func isUp(tag, name string) bool {
-	return exec.Command("tmux", "has-session", "-t", "="+tmuxName(tag, name)).Run() == nil
+	tn := tmuxName(tag, name)
+	return sessionExists(tn) && paneRunningClaude(tn)
 }
 
 // topicNames returns the display names in a registry root, sorted for stable output.

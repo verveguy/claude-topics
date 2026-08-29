@@ -221,6 +221,11 @@ func cmdForget(args []string) error {
 	if isUp(profileTag(configDir), name) {
 		return fmt.Errorf("%q is still up — `topic down %q` first", name, name)
 	}
+	// Forgetting is the last chance to clean up: after the registry entry is gone
+	// nothing can name this topic, so a husk left here would linger unreferenced.
+	if clearHusk(profileTag(configDir), name) {
+		fmt.Printf("note: %q had already exited; cleared its leftover tmux session.\n", name)
+	}
 	if regGet(topicsRoot, name, "state") == "adopted" {
 		fmt.Fprintf(os.Stderr, "note: %q was adopted; its original session may still be running.\n", name)
 	}

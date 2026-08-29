@@ -223,6 +223,12 @@ func cmdDown(args []string) error {
 			fmt.Printf("    topic up %q   # relaunches it under topic management, resuming context\n", name)
 			return nil
 		}
+		// A husk — the tmux session outlived the Claude process inside it. Clear it so
+		// the name is free and `topic list` stops showing a window that does nothing.
+		if clearHusk(profileTag(configDir), name) {
+			fmt.Printf("%q had already exited; cleared its leftover tmux session.\n", name)
+			return cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()})
+		}
 		fmt.Printf("%q is already down.\n", name)
 		return nil
 	}
@@ -257,6 +263,20 @@ func cmdDownAll(args []string) error {
 	did, skipped := false, ""
 	for _, name := range topicNames(topicsRoot) {
 		if !isUp(tag, name) {
+			// down-all is the bulk cleanup path — topics-cycle down runs it — so it
+			// has to clear husks too, or a crashed session survives a full cycle.
+			if hasHusk(tag, name) {
+				did = true
+				if dry {
+					fmt.Printf("  would clear leftover session: %s\n", name)
+					continue
+				}
+				clearHusk(tag, name)
+				fmt.Printf("  %q had already exited; cleared its leftover tmux session.\n", name)
+				if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()}); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		// Putting our own topic down terminates the session running this command, so
