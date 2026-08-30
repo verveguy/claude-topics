@@ -70,6 +70,8 @@ what makes hand-off possible.
                               point is what you do in between (log in/out, upgrade).
   topic ensure-dispatcher     Start the Dispatcher topic if it is not up.
                               (Run by launchd at login and every 5 minutes.)
+  topic doctor                Whether this binary can hold a macOS permission
+                              decision — run it if a dialog keeps naming ` + "`topic`" + `.
 
 Each topic is backed by a stable session UUID, so ` + "`" + `up` + "`" + ` is a lossless --resume.
 Every session is started with BOTH --remote-control "<name>" and --name "<name>".
@@ -141,6 +143,7 @@ func main() {
 
 	// ---- topics ----------------------------------------------------------------
 	case "up":
+		warnIfUnsigned()
 		err = cmdUp(withProfile(args))
 	case "down":
 		err = cmdDown(withProfile(requireName(args, `topic down "<name>"`)))
@@ -178,9 +181,16 @@ func main() {
 		err = cmdFork(withProfile(args))
 
 	case "cycle":
+		warnIfUnsigned()
 		err = cmdCycle(args)
 	case "ensure-dispatcher":
+		// The launchd path, and the one that creates the tmux server after a reboot —
+		// so this is where an unsigned binary does its damage. The warning lands in
+		// ~/Library/Logs/claude-dispatcher*.log, which is where you would look.
+		warnIfUnsigned()
 		err = cmdEnsureDispatcher([]string{p.dispatcher, p.configDir, p.topicsRoot})
+	case "doctor":
+		err = cmdDoctor(args)
 
 	// ---- low-level helpers, kept for debugging -----------------------------------
 	case "get":

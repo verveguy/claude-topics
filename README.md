@@ -262,6 +262,8 @@ topic --help
 place — the plugin as a **symlink back into the repo**, so editing a skill takes
 effect immediately. Re-run it after changing anything under `cmd/`.
 
+**Build with `make build` or `./install.sh`, never a bare `go build`** — see below.
+
 To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
 
 ```bash
@@ -272,13 +274,80 @@ CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
 leaves `<profile>/topics/` alone — that's your registry, handoff docs and briefs, not
 the tool.
 
+### Why the binary is code-signed
+
+Build with `make build` (or `./install.sh`, which calls the same script). A bare
+`go build` produces a binary that works fine and then, days later, buries you in macOS
+permission dialogs you cannot get rid of.
+
+The symptom is startling, because `topic` appears to be asking for things it has no
+business wanting:
+
+> **"topic" would like to access data from other apps.**
+
+and the same for your photo library, your Documents folder, and all your files. `topic`
+reads nothing outside `~/.claude*` and its own registry, so this looks like malware.
+It isn't. Two mechanisms compose:
+
+**1. topic becomes the responsible process for everything in tmux.** launchd starts
+`topic ensure-dispatcher` at login, before any terminal is open — so `topic` is what
+creates the tmux server. macOS attributes a permission request to the *responsible*
+process, the ancestor that started the chain, and the children here are unsigned
+interpreters (`node`, `sh`, `find`) with no identity of their own. So every request
+made by any Claude session, MCP server, hook, or `find` a session runs arrives wearing
+topic's name. An MCP server wants the microphone; a session greps from `$HOME` and
+walks into `~/Pictures`; the dialog says `topic`. You never see this before a reboot,
+because your terminal emulator started the tmux server and already held those grants.
+
+**2. Clicking the dialog does nothing.** The Go linker signs ad-hoc with
+`Identifier=a.out`. That is not a unique identity — every ad-hoc Go binary on the
+machine claims it — so TCC will not persist a decision against it. The stored answer
+stays "unknown" and the dialog returns forever, whether you clicked Allow or
+Don't Allow.
+
+`scripts/build.sh` signs with a stable identifier (`io.github.verveguy.topic`), which
+is what lets one answer stick. It also stamps that identifier in at link time, so the
+binary can tell whether it was built correctly: `topic up`, `topic cycle` and
+`topic ensure-dispatcher` warn on stderr when it wasn't, and `topic doctor` explains
+what to do.
+
+```bash
+topic doctor      # what macOS thinks this binary is, and how to fix it
+```
+
+**Answer the dialog with Don't Allow.** A denial persists exactly as a grant does, and
+a grant to `topic` is inherited by everything it spawns — every session, worker and MCP
+server. Full Disk Access on `topic` is Full Disk Access for all of them. If some tool
+genuinely needs a protected path it will fail under its own name, and you can grant
+that app directly.
+
+If you have already been living with this, the signed binary alone won't settle it:
+the running tmux server predates it, and its sessions are still parented onto the old
+one. From a terminal **outside tmux** — and note `kill-server` ends every session,
+including any daemons you run there:
+
+```bash
+topic cycle down
+tmux kill-server
+tccutil reset All io.github.verveguy.topic
+topic cycle up
+```
+
+To sign with a real Developer ID instead of ad-hoc:
+
+```bash
+TOPIC_SIGN_IDENTITY="Developer ID Application: You (TEAMID)" make build
+```
+
 ### What it assumes
 
 - **macOS**, for the Dispatcher. `topic cycle` and the always-up Dispatcher use
   launchd (`~/Library/LaunchAgents`, `launchctl`). Everything else — up, down, fork,
   handoff, move, rename, adopt — is tmux and Claude Code only, so it would work on
   Linux with a systemd-user equivalent, which nobody has written.
-- `tmux`, `claude`, `go`, `git`, and `~/.local/bin` on your `PATH`.
+- `tmux`, `claude`, `go`, `git`, `make`, and `~/.local/bin` on your `PATH`. Also
+  `codesign`, from the Xcode command line tools — the build refuses to produce an
+  unsigned binary rather than hand you one that nags forever.
 - A Claude Code profile that has completed first-run setup. `topic` refuses to
   automate one that has not, rather than hanging on the prompt — see Profiles.
 

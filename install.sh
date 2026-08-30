@@ -77,25 +77,12 @@ link() {
 }
 
 # The JSON layer is a Go helper; build it before linking anything that needs it.
-if command -v go >/dev/null; then
-  (cd "$REPO" && go build -o bin/topic ./cmd/topic) \
-    && say "built bin/topic"
-else
-  echo "go not found on PATH — needed to build bin/topic" >&2; exit 1
-fi
-
-# Give the binary a stable signing identity on macOS. The Go linker signs ad-hoc
-# with Identifier=a.out, which is not a unique identity — so macOS cannot persist
-# a TCC grant against it and re-prompts every launch. Worse, `topic` is what
-# launchd starts after a reboot, which makes it the *responsible process* for the
-# tmux server and therefore for every Claude session, MCP server and hook beneath
-# it: their file-access prompts all show up wearing topic's name. A stable
-# identifier lets those grants stick instead of being asked for over and over.
-if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null; then
-  codesign --force --sign - --identifier com.verveguy.topic "$REPO/bin/topic" 2>/dev/null \
-    && say "signed bin/topic (com.verveguy.topic)" \
-    || echo "warning: could not codesign bin/topic — macOS will re-prompt for permissions" >&2
-fi
+#
+# scripts/build.sh is the only supported build path: as well as compiling, it gives
+# the binary a stable code-signing identity, without which macOS re-asks for
+# permissions forever and blames `topic` for requests its children made. The script
+# explains the mechanism in full; README has the short version.
+"$REPO/scripts/build.sh" || exit 1
 
 # topics-cycle became `topic cycle`; clear the stale symlink so it cannot shadow it.
 [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed the old $BIN/topics-cycle (now: topic cycle)"; }
