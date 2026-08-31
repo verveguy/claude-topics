@@ -243,7 +243,10 @@ cannot be mistaken for missing topics.
   every transcript, and a re-minted Remote Control identity.
 - **[The Dispatcher](docs/guide.md#the-dispatcher)** — one always-up topic per
   profile whose job is running `topic` commands for the others, so you can start work
-  remotely when nothing is up.
+  remotely when nothing is up. It runs in `<profile>/dispatcher/` unless its registry
+  entry or `CLAUDE_DISPATCHER_DIR` says otherwise — deliberately not `$HOME`, where an
+  unqualified search walks every TCC-protected folder you own and raises permission
+  dialogs blaming `topic`. Where it runs does not constrain where it starts topics.
 - **[Cycling everything](docs/guide.md#cycling-everything-topic-cycle)** —
   `topic cycle down` / `up` takes every profile's topics down and back, launchd agents
   included, for logging in and out or upgrading.
