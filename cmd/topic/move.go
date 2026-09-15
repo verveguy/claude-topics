@@ -81,8 +81,9 @@ func resolveProfile(s string) string {
 	switch {
 	case s == "" || s == "default":
 		return filepath.Join(home, ".claude")
-	case strings.HasPrefix(s, "/"):
-		return strings.TrimSuffix(s, "/")
+	case filepath.IsAbs(s) || strings.HasPrefix(s, "/"):
+		// IsAbs covers C:\ on Windows; the "/" check keeps rooted paths working there too.
+		return strings.TrimRight(s, `/\`)
 	default:
 		return filepath.Join(home, ".claude-"+s)
 	}

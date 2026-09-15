@@ -268,16 +268,32 @@ To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
 CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
 ```
 
-`./install.sh --uninstall` removes the links and the launchd agent. It deliberately
+On **Windows**, from PowerShell (needs Go, and MSYS2 with `pacman -S tmux`):
+
+```powershell
+git clone https://github.com/verveguy/claude-topics.git $HOME\dev\claude-topics
+cd $HOME\dev\claude-topics; .\install.ps1 -DispatcherName "Dispatcher (<this machine>)"
+```
+
+`install.ps1` copies `topic.exe` to `~\.local\bin` (re-run it after changing `cmd\`),
+junctions the plugin into place, and registers a Task Scheduler task,
+`\claude-topics\claude-dispatcher`, that runs `topic ensure-dispatcher` at logon and every
+five minutes — so the Dispatcher comes back after a reboot. Topics run in MSYS2's tmux with
+a bash pane; attach with `tmux attach -t "<name>"` from an MSYS2 shell. Give each machine's
+Dispatcher its own name: they all advertise it to Remote Control.
+
+`./install.sh --uninstall` removes the links and the launchd agent (`.\install.ps1
+-Uninstall` removes the binary, junction and task on Windows). It deliberately
 leaves `<profile>/topics/` alone — that's your registry, handoff docs and briefs, not
 the tool.
 
 ### What it assumes
 
-- **macOS**, for the Dispatcher. `topic cycle` and the always-up Dispatcher use
-  launchd (`~/Library/LaunchAgents`, `launchctl`). Everything else — up, down, fork,
-  handoff, move, rename, adopt — is tmux and Claude Code only, so it would work on
-  Linux with a systemd-user equivalent, which nobody has written.
+- **macOS or Windows**, for the Dispatcher. On macOS `topic cycle` and the always-up
+  Dispatcher use launchd (`~/Library/LaunchAgents`, `launchctl`); on Windows, Task
+  Scheduler (see below). Everything else — up, down, fork, handoff, move, rename,
+  adopt — is tmux and Claude Code only, so it would work on Linux with a systemd-user
+  equivalent, which nobody has written.
 - `tmux`, `claude`, `go`, `git`, and `~/.local/bin` on your `PATH`.
 - A Claude Code profile that has completed first-run setup. `topic` refuses to
   automate one that has not, rather than hanging on the prompt — see Profiles.
