@@ -22,7 +22,7 @@ func topicScript() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p := filepath.Join(filepath.Dir(self), "topic")
+	p := filepath.Join(filepath.Dir(self), "topic"+exeSuffix)
 	if _, err := os.Stat(p); err != nil {
 		if p, err2 := exec.LookPath("topic"); err2 == nil {
 			return p, nil
@@ -180,7 +180,7 @@ func whoami(topicsRoot, configDir string) string {
 	if os.Getenv("TMUX") == "" {
 		return ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "#S").Output()
+	out, err := tmuxCmd("display-message", "-p", "#S").Output()
 	if err != nil {
 		return ""
 	}

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps the "Dispatcher" Claude topic alive on Windows: the Task Scheduler counterpart of
+  launchd/io.github.verveguy.claude-dispatcher.plist.template.
+
+  `topic ensure-dispatcher` is idempotent, so the task simply runs it at logon and every
+  five minutes. The real process lives inside a detached tmux session that Task
+  Scheduler cannot watch, which is why supervision goes through that check.
+
+  install.ps1 renders this (the __PLACEHOLDERS__), registers it, and keeps the rendered
+  copy in %LOCALAPPDATA%\claude-topics\tasks\ — those copies are how `topic cycle` finds
+  every installed profile, exactly as the plists are on macOS.
+
+  LeastPrivilege matters: an elevated Dispatcher would start elevated Claude sessions
+  whose files end up owned by Administrators rather than the user.
+-->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>claude-topics: topic ensure-dispatcher at logon and every 5 minutes (profile: __CONFIG_DIR__)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>__USER__</UserId>
+      <Delay>PT30S</Delay>
+    </LogonTrigger>
+    <TimeTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>__USER__</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>__COMMAND__</Command>
+      <Arguments>__ARGUMENTS__</Arguments>
+      <WorkingDirectory>__HOME__</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

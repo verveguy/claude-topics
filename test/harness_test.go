@@ -33,7 +33,11 @@ func topicBin(t *testing.T) string {
 	if !ok {
 		t.Fatal("cannot resolve test file path")
 	}
-	bin := filepath.Join(filepath.Dir(filepath.Dir(self)), "bin", "topic")
+	name := "topic"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(filepath.Dir(filepath.Dir(self)), "bin", name)
 	if _, err := os.Stat(bin); err != nil {
 		t.Fatalf("topic binary not found at %s: %v", bin, err)
 	}

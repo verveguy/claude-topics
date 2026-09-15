@@ -13,16 +13,18 @@ import (
 // cycle takes every profile's topics down cleanly and brings them back.
 //
 // It exists for the ORDER, which is easy to get wrong and not obvious when you do:
-// the launchd agents run `ensure-dispatcher` every five minutes, so a Dispatcher put
-// down without unloading its agent first comes back underneath you — typically in the
-// middle of logging a profile in, which is exactly when it causes the most confusion.
+// the Dispatcher agents (launchd on macOS, Task Scheduler on Windows) run
+// `ensure-dispatcher` every five minutes, so a Dispatcher put down without disabling its
+// agent first comes back underneath you — typically in the middle of logging a profile
+// in, which is exactly when it causes the most confusion.
 //
 // Two verbs rather than one, because the point of taking everything down is what you
 // do in between: log in or out, rotate credentials, upgrade Claude Code.
 
 // launchAgent is one installed Dispatcher agent, and therefore one installed profile.
 // The agents ARE the registry of installed profiles — each names the profile it
-// manages — so there is no second list to drift out of sync.
+// manages — so there is no second list to drift out of sync. On Windows the "plist" is
+// the rendered task XML install.ps1 keeps; see agentFiles.
 type launchAgent struct {
 	plist     string
 	configDir string
@@ -30,21 +32,14 @@ type launchAgent struct {
 
 func launchAgents() []launchAgent {
 	home, _ := os.UserHomeDir()
-	// Both labels: io.github.* is current, com.verveguy.* is what installs made before
-	// the namespace was anchored to a domain that exists. Missing an agent here would
-	// mean `cycle down` leaves it supervising, which is the exact failure this command
-	// exists to prevent.
-	var paths []string
-	for _, pat := range []string{"io.github.verveguy.claude-dispatcher*.plist", "com.verveguy.claude-dispatcher*.plist"} {
-		found, _ := filepath.Glob(filepath.Join(home, "Library", "LaunchAgents", pat))
-		paths = append(paths, found...)
-	}
+	paths := agentFiles(home)
 	sort.Strings(paths)
 	var out []launchAgent
 	for _, p := range paths {
-		dir := plistConfigDir(p)
+		dir := agentConfigDir(p)
 		if dir == "" {
-			// A pre-profile agent, written before profiles existed: the default one.
+			// A pre-profile agent, written before profiles existed, or the default
+			// profile's, which leaves CLAUDE_CONFIG_DIR unset on purpose.
 			dir = filepath.Join(home, ".claude")
 		}
 		out = append(out, launchAgent{p, dir})
@@ -148,12 +143,12 @@ func cmdCycle(args []string) error {
 		verb = positional[0]
 	}
 
-	run := func(what string, argv ...string) {
+	run := func(argv []string) {
 		if dry {
-			fmt.Printf("  would: %s %s\n", what, strings.Join(argv, " "))
+			fmt.Printf("  would: %s\n", strings.Join(argv, " "))
 			return
 		}
-		_ = exec.Command(what, argv...).Run()
+		_ = exec.Command(argv[0], argv[1:]...).Run()
 	}
 
 	switch verb {
@@ -161,20 +156,20 @@ func cmdCycle(args []string) error {
 		for _, a := range launchAgents() {
 			label := "(no agent installed)"
 			if a.plist != "" {
-				label = strings.TrimSuffix(filepath.Base(a.plist), ".plist")
+				label = strings.TrimSuffix(filepath.Base(a.plist), filepath.Ext(a.plist))
 			}
 			fmt.Printf("  %-40s %s\n", label, a.configDir)
 		}
 		return nil
 
 	case "down":
-		fmt.Println("== 1. Unloading launchd agents (or they restart Dispatchers underneath you)")
+		fmt.Printf("== 1. Disabling %s (or they restart Dispatchers underneath you)\n", agentKind)
 		for _, a := range launchAgents() {
 			if a.plist == "" {
 				fmt.Println("  (no agents installed)")
 				continue
 			}
-			run("launchctl", "unload", a.plist)
+			run(agentDisableCmd(a.plist))
 		}
 		fmt.Println()
 		fmt.Println("== 2. Putting topics down (lossless — every session stays resumable)")
@@ -194,13 +189,13 @@ func cmdCycle(args []string) error {
 		return nil
 
 	case "up":
-		fmt.Println("== 1. Reloading launchd agents")
+		fmt.Printf("== 1. Re-enabling %s\n", agentKind)
 		for _, a := range launchAgents() {
 			if a.plist == "" {
 				fmt.Println("  (no agents installed)")
 				continue
 			}
-			run("launchctl", "load", "-w", a.plist)
+			run(agentEnableCmd(a.plist))
 		}
 		fmt.Println()
 		fmt.Println("== 2. Starting each profile's Dispatcher")
