@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,7 +46,16 @@ func liveEnv(t *testing.T) *env {
 		home, _ := os.UserHomeDir()
 		profile = filepath.Join(home, strings.TrimPrefix(profile, "~"))
 	}
-	if _, err := os.Stat(filepath.Join(profile, ".claude.json")); err != nil {
+	// The default profile keeps its config at ~/.claude.json, NOT ~/.claude/.claude.json:
+	// the latter is a different file that has never completed onboarding. Same rule as
+	// configFileOf in the CLI, and as env.run's handling of CLAUDE_CONFIG_DIR.
+	home, _ := os.UserHomeDir()
+	profile = strings.TrimRight(profile, `/\`)
+	configFile := filepath.Join(profile, ".claude.json")
+	if profile == filepath.Join(home, ".claude") {
+		configFile = filepath.Join(home, ".claude.json")
+	}
+	if _, err := os.Stat(configFile); err != nil {
 		t.Fatalf("TOPIC_TEST_PROFILE=%s is not a Claude config dir: %v", profile, err)
 	}
 	return &env{
@@ -81,7 +89,7 @@ func (e *env) tearDown(name, workDir string) {
 		e.removeTranscripts(ids)
 	}
 	// Belt and braces: a half-started session leaves a tmux session behind.
-	exec.Command("tmux", "kill-session", "-t", "="+tmuxName(e, name)).Run()
+	tmuxCommand("kill-session", "-t", "="+tmuxName(e, name)).Run()
 	os.RemoveAll(workDir)
 }
 
@@ -303,7 +311,7 @@ func TestLiveRefusesUnonboardedProfile(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "work")
 	mkdirAll(t, workDir)
 	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", "="+tmuxName(e, name)).Run()
+		tmuxCommand("kill-session", "-t", "="+tmuxName(e, name)).Run()
 	})
 
 	r := e.run("up", name, workDir)
@@ -312,7 +320,7 @@ func TestLiveRefusesUnonboardedProfile(t *testing.T) {
 	}
 	mustContain(t, r.out(), "first-run setup", "should name the real problem")
 
-	out, _ := exec.Command("tmux", "ls").Output()
+	out, _ := tmuxCommand("ls").Output()
 	if strings.Contains(string(out), tmuxName(e, name)) {
 		t.Error("a session was left parked at the prompt")
 	}

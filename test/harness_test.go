@@ -81,10 +81,19 @@ func (r result) out() string { return r.stdout + r.stderr }
 func (e *env) run(args ...string) result {
 	e.t.Helper()
 	cmd := exec.Command(topicBin(e.t), args...)
-	cmd.Env = append(os.Environ(),
-		"CLAUDE_CONFIG_DIR="+e.configDir,
-		"CLAUDE_TOPICS_ROOT="+e.topicsRoot,
-	)
+	var environ []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") && !strings.HasPrefix(kv, "CLAUDE_TOPICS_ROOT=") {
+			environ = append(environ, kv)
+		}
+	}
+	// The default profile means "variable absent", never "set to ~/.claude": set, Claude
+	// Code reads ~/.claude/.claude.json, which has never been onboarded. A live run
+	// against the default profile must leave it unset, exactly as topic itself does.
+	if home, _ := os.UserHomeDir(); e.configDir != filepath.Join(home, ".claude") {
+		environ = append(environ, "CLAUDE_CONFIG_DIR="+e.configDir)
+	}
+	cmd.Env = append(environ, "CLAUDE_TOPICS_ROOT="+e.topicsRoot)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
