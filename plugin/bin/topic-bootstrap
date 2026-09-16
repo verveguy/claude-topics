@@ -49,8 +49,14 @@ install_it() {
   fi
 
   # install.sh builds the binary, links it, and installs the launchd agent for the
-  # ACTIVE profile — it honours CLAUDE_CONFIG_DIR just as `topic` itself does.
-  ( cd "$REPO_DIR" && ./install.sh )
+  # ACTIVE profile — it honours CLAUDE_CONFIG_DIR just as `topic` itself does. On Windows
+  # (Git Bash / MSYS2) install.ps1 does the same with a Task Scheduler task.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$REPO_DIR/install.ps1")" ;;
+    *)
+      ( cd "$REPO_DIR" && ./install.sh ) ;;
+  esac
 
   echo
   report

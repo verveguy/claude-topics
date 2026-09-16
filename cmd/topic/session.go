@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,10 +33,10 @@ var startupPatterns = struct {
 	externalImports: regexp.MustCompile(`Allow external CLAUDE\.md file imports`),
 }
 
-func tmuxRun(args ...string) error { return exec.Command("tmux", args...).Run() }
+func tmuxRun(args ...string) error { return tmuxCmd(args...).Run() }
 
 func capturePane(target string) string {
-	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p").Output()
+	out, err := tmuxCmd("capture-pane", "-t", target, "-p").Output()
 	if err != nil {
 		return ""
 	}
@@ -79,7 +78,7 @@ var shellCommands = map[string]bool{
 // panes. launchSession deliberately leaves the shell alive when Claude exits, so this
 // is what separates a live topic from the husk left behind by one that quit.
 func paneRunningClaude(target string) bool {
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
@@ -223,7 +222,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 	if sessionExists(tn) {
 		killSession(tn)
 	}
-	if err := tmuxRun("new-session", "-d", "-s", tn, "-c", dir); err != nil {
+	if err := tmuxStartSession(append([]string{"new-session", "-d", "-s", tn, "-c", tmuxDir(dir)}, tmuxShell()...)...); err != nil {
 		return fmt.Errorf("creating tmux session %q: %w", tn, err)
 	}
 	if err := tmuxRun("send-keys", "-t", tn, cmd, "Enter"); err != nil {

@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -220,14 +219,6 @@ func cmdSessions(args []string) error {
 		fmt.Printf("%s\t%s\t%s\t%s\n", pid, sid, scalar(d["cwd"]), scalar(d["name"]))
 	}
 	return nil
-}
-
-func alive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // ---------------------------------------------------------------- transcripts
