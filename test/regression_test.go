@@ -2,7 +2,9 @@ package test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -251,5 +253,50 @@ func TestAdoptDryRunRegistersNothing(t *testing.T) {
 	e.mustRun("adopt", "Resumable Thing")
 	if got := e.readTopic("resumable-thing")["sessionId"]; got != sid {
 		t.Errorf("sessionId = %v, want %s", got, sid)
+	}
+}
+
+// The Go linker signs ad-hoc with Identifier=a.out, which is not a unique identity, so
+// macOS cannot persist a TCC decision against it. Because launchd starts `topic` before
+// any terminal exists, topic creates the tmux server and becomes the responsible process
+// for every session, MCP server and `find` beneath it — so their permission dialogs all
+// named `topic`, and neither Allow nor Don't Allow ever stuck. Found 2026-08-29.
+//
+// scripts/build.sh signs with a stable identifier and stamps it in at link time. This
+// asserts a binary built any other way does not reach an install.
+func TestBinaryCanHoldAPermissionDecision(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("TCC, and therefore the signing identity, is macOS-only")
+	}
+	bin := topicBin(t)
+
+	// What macOS thinks it is. codesign reports on stderr, hence CombinedOutput.
+	out, err := exec.Command("codesign", "-d", "--verbose=2", bin).CombinedOutput()
+	if err != nil {
+		t.Fatalf("codesign failed on %s: %v\n%s", bin, err, out)
+	}
+	id := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Identifier="); ok {
+			id = v
+			break
+		}
+	}
+	if id == "" || id == "a.out" {
+		t.Fatalf("bin/topic Identifier=%q — built with a bare `go build`. Use `make build`.", id)
+	}
+
+	// And the binary must know its own identity, so `topic doctor` and the warning on
+	// the session-creating commands can tell the difference.
+	r := exec.Command(bin, "doctor")
+	doctor, err := r.CombinedOutput()
+	if err != nil {
+		t.Fatalf("topic doctor failed: %v\n%s", err, doctor)
+	}
+	if strings.Contains(string(doctor), "PROBLEM") {
+		t.Errorf("topic doctor reports a problem with a correctly built binary:\n%s", doctor)
+	}
+	if !strings.Contains(string(doctor), id) {
+		t.Errorf("topic doctor did not report Identifier %q:\n%s", id, doctor)
 	}
 }

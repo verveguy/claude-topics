@@ -347,8 +347,57 @@ func cmdEnsureDispatcher(args []string) error {
 	}
 	dir := regGet(topicsRoot, name, "dir")
 	if dir == "" {
-		dir, _ = os.UserHomeDir()
+		dir = dispatcherDir(configDir)
 	}
 	fmt.Printf("%q is down — starting it.\n", name)
 	return cmdUp([]string{name, dir, configDir, topicsRoot})
+}
+
+// dispatcherDir is where a Dispatcher session runs when the registry records no
+// directory for it.
+//
+// Deliberately NOT $HOME, which is what this was until 2026-08-31. The Dispatcher is a
+// long-lived Claude session whose whole job is running `topic` commands for the other
+// topics; it does no file work of its own. But a session sitting in the home directory
+// makes an unqualified search mean "walk everything you own", and on macOS that trips a
+// TCC prompt for every protected folder it reaches — Photos, Documents, Desktop,
+// Downloads, other apps' data. Each one is attributed to `topic`, because topic is the
+// responsible process for the whole tmux tree (see signing.go), so the dialogs accuse
+// topic of wanting your photo library. Parking the Dispatcher somewhere inert removes
+// the default that makes that traversal the path of least resistance.
+//
+// It is not a sandbox: an absolute path still goes where it is pointed. It removes a
+// default, not a capability.
+//
+// This does NOT constrain the topics the Dispatcher starts. `topic up` takes its
+// directory from its argument or the registry and hands it to tmux as -c, so every
+// other topic starts exactly where it always did.
+func dispatcherDir(configDir string) string {
+	if d := os.Getenv("CLAUDE_DISPATCHER_DIR"); d != "" {
+		return d
+	}
+	d := filepath.Join(configDir, "dispatcher")
+	err := os.MkdirAll(d, 0o700)
+	if err == nil {
+		return d
+	}
+	// A Dispatcher in the wrong directory still beats no Dispatcher: without one there
+	// is no way to bring topics up remotely, which is the whole point of it. But not
+	// $HOME — a search from there is the bug this directory exists to prevent — so fall
+	// back to a private temp directory, which macOS does not guard with TCC prompts.
+	// And say so: this runs unattended under launchd, where a silent fallback would go
+	// unnoticed until the permission dialogs came back.
+	tag := profileTag(configDir)
+	if tag == "" {
+		tag = "default"
+	}
+	fallback := filepath.Join(os.TempDir(), "topic-dispatcher-"+tag)
+	if ferr := os.MkdirAll(fallback, 0o700); ferr == nil {
+		fmt.Fprintf(os.Stderr, "[warn] could not create %s (%v) — running the Dispatcher in %s instead\n", d, err, fallback)
+		return fallback
+	}
+	home, _ := os.UserHomeDir()
+	fmt.Fprintf(os.Stderr, "[warn] could not create %s (%v) or %s — running the Dispatcher in $HOME;\n", d, err, fallback)
+	fmt.Fprintln(os.Stderr, "       unqualified searches from it will raise macOS permission dialogs naming `topic`")
+	return home
 }
