@@ -377,11 +377,27 @@ func dispatcherDir(configDir string) string {
 		return d
 	}
 	d := filepath.Join(configDir, "dispatcher")
-	if err := os.MkdirAll(d, 0o700); err != nil {
-		// A Dispatcher in the wrong directory beats no Dispatcher at all: without one
-		// there is no way to bring topics up remotely, which is the whole point of it.
-		home, _ := os.UserHomeDir()
-		return home
+	err := os.MkdirAll(d, 0o700)
+	if err == nil {
+		return d
 	}
-	return d
+	// A Dispatcher in the wrong directory still beats no Dispatcher: without one there
+	// is no way to bring topics up remotely, which is the whole point of it. But not
+	// $HOME — a search from there is the bug this directory exists to prevent — so fall
+	// back to a private temp directory, which macOS does not guard with TCC prompts.
+	// And say so: this runs unattended under launchd, where a silent fallback would go
+	// unnoticed until the permission dialogs came back.
+	tag := profileTag(configDir)
+	if tag == "" {
+		tag = "default"
+	}
+	fallback := filepath.Join(os.TempDir(), "topic-dispatcher-"+tag)
+	if ferr := os.MkdirAll(fallback, 0o700); ferr == nil {
+		fmt.Fprintf(os.Stderr, "[warn] could not create %s (%v) — running the Dispatcher in %s instead\n", d, err, fallback)
+		return fallback
+	}
+	home, _ := os.UserHomeDir()
+	fmt.Fprintf(os.Stderr, "[warn] could not create %s (%v) or %s — running the Dispatcher in $HOME;\n", d, err, fallback)
+	fmt.Fprintln(os.Stderr, "       unqualified searches from it will raise macOS permission dialogs naming `topic`")
+	return home
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,37 @@ func TestDispatcherDirIsNotHome(t *testing.T) {
 	// Dispatcher is started unattended by launchd where that failure is invisible.
 	if fi, err := os.Stat(got); err != nil || !fi.IsDir() {
 		t.Errorf("dispatcherDir did not create %s: %v", got, err)
+	}
+}
+
+// When <profile>/dispatcher cannot be created — a read-only volume, a CLAUDE_CONFIG_DIR
+// that does not exist yet — the fallback must still not be $HOME. It used to be, which
+// silently reintroduced the TCC bug above in exactly the unattended launchd context
+// where nobody would notice. (Review feedback on #2.)
+func TestDispatcherDirFallbackIsNotHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("cannot resolve home: %v", err)
+	}
+	t.Setenv("CLAUDE_DISPATCHER_DIR", "")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp) // keep the fallback inside the test's own temp dir
+
+	// A regular file where the config dir should be makes MkdirAll fail.
+	configDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(configDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := dispatcherDir(configDir)
+	if got == home {
+		t.Fatalf("dispatcherDir fell back to $HOME (%s) when the profile dir was unusable", got)
+	}
+	if !strings.HasPrefix(got, tmp) {
+		t.Errorf("dispatcherDir = %q, want a fallback under the temp dir %q", got, tmp)
+	}
+	if fi, err := os.Stat(got); err != nil || !fi.IsDir() {
+		t.Errorf("fallback %s was not created: %v", got, err)
 	}
 }
 
