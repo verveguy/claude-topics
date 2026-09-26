@@ -319,3 +319,100 @@ func stopSession(configDir, name string) {
 	}
 	killSession(tn)
 }
+
+// remoteControlPatterns key on Claude Code's /remote-control UI. Like startupPatterns,
+// this is the place to look first if Claude Code changes its wording.
+var remoteControlPatterns = struct {
+	connected, disconnectOption, disconnected *regexp.Regexp
+}{
+	// The slash-command autocomplete describes /remote-control by what it would do.
+	// It reads "Disconnect Remote Control" only while a bridge is connected; otherwise
+	// the command CONNECTS one, so nothing may be confirmed without seeing this.
+	connected: regexp.MustCompile(`/remote-control\s+Disconnect Remote Control`),
+	// The option in the dialog that opens on Enter.
+	disconnectOption: regexp.MustCompile(`Disconnect this session`),
+	// Printed once Claude Code has ended the bridge.
+	disconnected: regexp.MustCompile(`Remote Control disconnected`),
+}
+
+// cloudSessionURL is where a bridge's cloud session appears in the Claude UI.
+func cloudSessionURL(bridgeID string) string {
+	return "https://claude.ai/code/session_" + strings.TrimPrefix(bridgeID, "cse_")
+}
+
+// disconnectRemoteControl ends a running topic's Remote Control session from inside
+// Claude Code, which archives the cloud session under the account that owns it.
+//
+// It exists because a plain `down` does not do this. Claude Code keeps the cloud
+// session for resume on /exit and only marks it offline, and once move, rename or
+// rebridge strip the bridge record from the transcript, nothing ever reconnects to it:
+// the old account is left listing a dead session under the topic's name, and every
+// re-mint adds another. Disconnecting first lets Claude Code clean up with its own
+// credentials, while it is still running as the source account.
+//
+// Returns true once Claude Code confirms the disconnect. A false return with a nil
+// error means there was nothing to end: the topic is not running, or has no bridge.
+func disconnectRemoteControl(configDir, name string) (bool, error) {
+	tn := tmuxName(profileTag(configDir), name)
+	if !sessionExists(tn) || !paneRunningClaude(tn) {
+		return false, nil
+	}
+	clearInput := func() { _ = tmuxRun("send-keys", "-t", tn, "C-u") }
+
+	_ = tmuxRun("send-keys", "-t", tn, "Escape") // interrupt any in-flight turn
+	time.Sleep(400 * time.Millisecond)
+	clearInput()
+	_ = tmuxRun("send-keys", "-t", tn, "-l", "/remote-control")
+	time.Sleep(1200 * time.Millisecond)
+	if !remoteControlPatterns.connected.MatchString(capturePane(tn)) {
+		clearInput()
+		return false, nil
+	}
+
+	_ = tmuxRun("send-keys", "-t", tn, "Enter")
+	var pane string
+	for range 20 {
+		time.Sleep(250 * time.Millisecond)
+		if pane = capturePane(tn); remoteControlPatterns.disconnectOption.MatchString(pane) {
+			break
+		}
+	}
+	if err := selectMenuOption(tn, pane, remoteControlPatterns.disconnectOption); err != nil {
+		_ = tmuxRun("send-keys", "-t", tn, "Escape")
+		return false, err
+	}
+	for range 40 {
+		time.Sleep(250 * time.Millisecond)
+		if remoteControlPatterns.disconnected.MatchString(capturePane(tn)) {
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("Claude Code did not confirm the disconnect")
+}
+
+// retireRemoteControl is what move, rename and rebridge call before they discard a
+// topic's bridge record. It never blocks the operation: failing to archive leaves an
+// orphan, which is exactly what happened before this existed, so it says where the
+// orphan is instead of stopping.
+func retireRemoteControl(configDir, name, transcript string, wasUp bool) {
+	_, bridge := lastBridgeOf(transcript)
+	if bridge == "" {
+		return // no bridge, or already disconnected
+	}
+	if wasUp {
+		ok, err := disconnectRemoteControl(configDir, name)
+		if ok {
+			fmt.Printf("  remote control: disconnected %s… — its cloud session is archived\n", truncate(bridge, 16))
+			return
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  remote control: could not disconnect %q (%v)\n", name, err)
+		}
+	}
+	reason := "it is down, so it cannot end its cloud session from inside"
+	if wasUp {
+		reason = "it did not disconnect"
+	}
+	fmt.Fprintf(os.Stderr, "  remote control: %s — the old cloud session stays listed in the\n", reason)
+	fmt.Fprintf(os.Stderr, "    source account. Archive it there: %s\n", cloudSessionURL(bridge))
+}

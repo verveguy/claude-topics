@@ -187,12 +187,20 @@ that is already in the right place.
 
 **The cost of a re-mint:** the *cloud* conversation restarts. The local transcript
 keeps everything and the session resumes with its full history, but the Claude UI
-shows the topic from the re-mint onwards, and the previous cloud entry is orphaned —
-still listed, still renameable, no longer connected to anything. That orphan is what
-you are looking at if a session in the UI shows different content from the live one.
-Use `--keep-bridge` when continuous cloud history matters more than a correct name and
-account. The transcript is copied to `<topic>/backups/`
-first, since editing one is unsupported.
+shows the topic from the re-mint onwards. Use `--keep-bridge` when continuous cloud
+history matters more than a correct name and account. The transcript is copied to
+`<topic>/backups/` first, since editing one is unsupported.
+
+**The old cloud session is archived, if the topic is up.** Before `move`, `rename` or
+`rebridge` drop a bridge, they disconnect it from inside the running session
+(`/remote-control` → *Disconnect this session*). Claude Code then archives the cloud
+session itself, with its own credentials, while it is still running as the source
+account. A plain `down` does not do this — Claude Code keeps the cloud session for
+resume and only marks it offline — so without the disconnect every re-mint left the
+old account listing a dead session under the topic's name. A topic that is **down**
+has no process to disconnect: its old session stays listed, and `topic` prints its
+URL so you can archive it by hand. Topics re-minted before this change left such
+orphans behind; they are still listed and must be archived separately.
 
 `move` takes the whole topic: registry entry, handoff docs, briefs, and **every
 transcript it can still resume** — the current session and every retired one in its

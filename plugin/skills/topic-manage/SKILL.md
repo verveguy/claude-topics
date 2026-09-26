@@ -147,9 +147,13 @@ else does.
   [--down-only]` fixes one already in place.
 - **Re-minting restarts the cloud conversation.** The local transcript keeps
   everything and the session resumes with full history, but the Claude UI shows the
-  topic from the re-mint onwards and the old entry is orphaned — listed, renameable,
-  connected to nothing. Tell the user this before doing it in bulk; an orphan showing
-  different content from the live session is exactly how it presents.
+  topic from the re-mint onwards. Tell the user this before doing it in bulk.
+- **A re-mint archives the old cloud entry only if the topic is up.** `move`, `rename`
+  and `rebridge` disconnect a running topic's Remote Control first, which archives its
+  cloud session in the source account. A topic that is **down** cannot do that: its old
+  entry is orphaned — listed, renameable, connected to nothing — and `topic` prints its
+  URL. Prefer bringing a topic up before moving it. An orphan showing different content
+  from the live session is exactly how one presents.
 
 ## Shutting everything down
 

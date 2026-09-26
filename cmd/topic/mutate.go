@@ -399,6 +399,9 @@ func cmdRebridge(args []string) error {
 			fmt.Printf("  %s: would drop bridge %s…%s\n", t, truncate(old, 16), suffix)
 			continue
 		}
+		// Archive the old cloud session before its record is dropped (see
+		// retireRemoteControl); a down topic can only report where it is.
+		retireRemoteControl(configDir, t, tr, wasUp)
 		fmt.Printf("  %s: bridge %s… -> ", t, truncate(old, 16))
 		if wasUp {
 			_ = runTopicIn(configDir, topicsRoot, "", "down", t)

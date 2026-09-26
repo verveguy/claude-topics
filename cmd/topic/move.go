@@ -225,6 +225,13 @@ func cmdMove(args []string) error {
 	}
 	if !keepBridge {
 		fmt.Println("  remote control: will re-register under the destination profile's account")
+		if !copyMode {
+			if wasUp {
+				fmt.Println("                  and disconnect first, archiving the old cloud session")
+			} else {
+				fmt.Println("                  (it is down, so its old cloud session cannot be archived — the URL is printed)")
+			}
+		}
 	}
 	fmt.Printf("  registry: %s -> %s\n", srcDir, dstDir)
 
@@ -247,6 +254,17 @@ func cmdMove(args []string) error {
 		fmt.Println()
 		fmt.Println("Dry run — nothing moved.")
 		return nil
+	}
+
+	// End the old cloud session while the session can still do it as the source
+	// account. After the move nothing can: the bridge record is stripped below, and the
+	// source account's credentials are no longer in play. A --copy leaves the original
+	// in place, still owning its session, so there is nothing to retire.
+	if !keepBridge && !copyMode {
+		if cur := transcriptOf(configDir, regGet(topicsRoot, name, "sessionId")); cur != "" {
+			fmt.Println()
+			retireRemoteControl(configDir, name, cur, wasUp)
+		}
 	}
 
 	if wasUp {
@@ -458,9 +476,12 @@ func cmdRename(args []string) error {
 	if tr != "" {
 		fmt.Println("  transcript: re-titled, and its Remote Control bridge re-minted")
 	}
-	fmt.Println("  NOTE: the Claude UI conversation restarts; the old entry is orphaned there.")
 	if wasUp {
+		fmt.Println("  NOTE: the Claude UI conversation restarts; the old entry is disconnected and archived.")
 		fmt.Println("  it is UP: will be put down and brought back up under the new name")
+	} else {
+		fmt.Println("  NOTE: the Claude UI conversation restarts. It is down, so the old entry cannot be")
+		fmt.Println("        archived from here and stays listed — its URL is printed.")
 	}
 	if dry {
 		fmt.Println()
@@ -468,6 +489,9 @@ func cmdRename(args []string) error {
 		return nil
 	}
 
+	if tr != "" {
+		retireRemoteControl(configDir, old, tr, wasUp)
+	}
 	if wasUp {
 		if err := cmdDown([]string{old, configDir, topicsRoot}); err != nil {
 			return err
