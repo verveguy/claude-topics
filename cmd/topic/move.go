@@ -156,6 +156,9 @@ func cmdMove(args []string) error {
 	if fileExists(filepath.Join(dstDir, "topic.json")) {
 		return fmt.Errorf("move: %q already exists in %s (%s)", name, dst, dstDir)
 	}
+	if err := syncSessionID(configDir, topicsRoot, name, dry); err != nil {
+		return err
+	}
 
 	// An ADOPTED topic runs outside tmux, so isUp cannot see it. Moving its transcript
 	// while the process still holds it open would corrupt it — and unlike a managed
@@ -466,6 +469,9 @@ func cmdRename(args []string) error {
 	}
 
 	tag := profileTag(configDir)
+	if err := syncSessionID(configDir, topicsRoot, old, dry); err != nil {
+		return err
+	}
 	sid := regGet(topicsRoot, old, "sessionId")
 	tr := transcriptOf(configDir, sid)
 	wasUp := isUp(tag, old)

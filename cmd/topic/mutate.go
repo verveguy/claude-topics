@@ -375,6 +375,9 @@ func cmdRebridge(args []string) error {
 	}
 
 	for _, t := range targets {
+		if err := syncSessionID(configDir, topicsRoot, t, false); err != nil {
+			return err
+		}
 		sid := regGet(topicsRoot, t, "sessionId")
 		if sid == "" {
 			fmt.Printf("  %s: no session — skipping\n", t)

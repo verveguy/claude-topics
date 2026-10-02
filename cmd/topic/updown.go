@@ -233,6 +233,11 @@ func cmdDown(args []string) error {
 		return nil
 	}
 	fmt.Printf("Putting down %q…\n", name)
+	// Last chance: once the process exits, the record of which session it was on goes
+	// with it, and the next `up` would resume whatever the registry last heard of.
+	if err := syncSessionID(configDir, topicsRoot, name, false); err != nil {
+		return err
+	}
 	stopSession(configDir, name)
 	if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()}); err != nil {
 		return err

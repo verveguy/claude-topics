@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -318,6 +319,99 @@ func stopSession(configDir, name string) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	killSession(tn)
+}
+
+// liveSessionID is the session Claude Code is actually running in a topic's tmux
+// session, read from the record it keeps at <configDir>/sessions/<pid>.json. Empty when
+// nothing is running there.
+//
+// It can differ from the registry. /clear starts a new session id inside the same
+// process (verified 2026-10-02: the record follows it), and topic only records an id
+// when it launches a session — so a topic that was /cleared is running a conversation
+// the registry has never heard of.
+func liveSessionID(configDir, name string) string {
+	tn := tmuxName(profileTag(configDir), name)
+	out, err := exec.Command("tmux", "list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return ""
+	}
+	var pids []int
+	for _, f := range strings.Fields(string(out)) {
+		if p := atoi(f); p > 0 {
+			// launchSession types the command into a shell, so Claude is the pane's child.
+			pids = append(pids, p)
+			pids = append(pids, childPids(p)...)
+		}
+	}
+	return sessionIDOfPids(configDir, pids)
+}
+
+func childPids(pid int) []int {
+	out, _ := exec.Command("pgrep", "-P", strconv.Itoa(pid)).Output()
+	var kids []int
+	for _, f := range strings.Fields(string(out)) {
+		if k := atoi(f); k > 0 {
+			kids = append(kids, k)
+		}
+	}
+	return kids
+}
+
+// sessionIDOfPids returns the session id recorded for the first of pids that is alive
+// and has a record. The pid inside the record must match too: a record outlives its
+// process, and pids get recycled.
+func sessionIDOfPids(configDir string, pids []int) string {
+	for _, p := range pids {
+		d := load(filepath.Join(configDir, "sessions", strconv.Itoa(p)+".json"))
+		if sid := scalar(d["sessionId"]); sid != "" && atoi(scalar(d["pid"])) == p && alive(p) {
+			return sid
+		}
+	}
+	return ""
+}
+
+// liveSessionIDOf is the lookup syncSessionID uses; tests replace it, since the real
+// one needs a running Claude inside tmux.
+var liveSessionIDOf = liveSessionID
+
+// syncSessionID points the registry at the session a running topic is really on. The
+// id it replaces goes into history, so that conversation stays resumable and travels
+// with a move like any retired session.
+//
+// Every command that ends, relocates or re-mints a session must call this before it
+// reads the registry's sessionId. Without it they act on the conversation from before
+// a /clear and strand the live one: a move carried the stale transcript across and left
+// the real one behind, and the next `up` resumed the old conversation.
+func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
+	live := liveSessionIDOf(configDir, name)
+	reg := regGet(topicsRoot, name, "sessionId")
+	if live == "" || live == reg {
+		return nil
+	}
+	if dry {
+		fmt.Printf("  session: %q is running %s…, not the recorded %s… (a /clear starts a new\n"+
+			"    session) — the real run will follow it; this plan shows the recorded one.\n",
+			name, truncate(live, 8), truncate(reg, 8))
+		return nil
+	}
+	file := topicFile(topicsRoot, name)
+	m := load(file)
+	if reg != "" {
+		hist, _ := m["history"].([]any)
+		m["history"] = append(hist, map[string]any{
+			"sessionId":  reg,
+			"replacedBy": "clear",
+			"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
+		})
+	}
+	m["sessionId"] = live
+	if err := save(file, m); err != nil {
+		return err
+	}
+	fmt.Printf("  session: %q is running %s…, not the recorded %s… (a /clear starts a new\n"+
+		"    session) — following it; the old one is kept in history.\n",
+		name, truncate(live, 8), truncate(reg, 8))
+	return nil
 }
 
 // remoteControlPatterns key on Claude Code's /remote-control UI. Like startupPatterns,
