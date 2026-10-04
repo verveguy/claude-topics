@@ -18,7 +18,7 @@ import (
 // look when a launch misbehaves — suspect this first.
 
 var startupPatterns = struct {
-	trust, trustAccept, ready, onboarding, externalImports *regexp.Regexp
+	trust, trustAccept, ready, onboarding, externalImports, pendingChoice, noConversation *regexp.Regexp
 }{
 	// Auto-accepted: the workspace trust prompt.
 	trust: regexp.MustCompile(`trust this folder`),
@@ -33,6 +33,63 @@ var startupPatterns = struct {
 	onboarding: regexp.MustCompile(`(?i)colorblind-friendly|Select login method|Choose the text style`),
 	// A security question about loading files from outside the working directory.
 	externalImports: regexp.MustCompile(`Allow external CLAUDE\.md file imports`),
+	// The footer of any other on-screen menu, such as the one-off "Claude in Chrome
+	// extension detected" question a fresh profile asks. Waiting will not clear it, and
+	// what to answer is the user's call.
+	pendingChoice: regexp.MustCompile(`Enter to confirm`),
+	// Printed by `claude --resume` as it exits when the session has no transcript.
+	noConversation: regexp.MustCompile(`No conversation found with session ID`),
+}
+
+type startupState int
+
+const (
+	startupWaiting startupState = iota
+	startupTrust
+	startupExternalImports
+	startupOnboarding
+	startupReady
+	startupPendingChoice
+	startupNoConversation
+)
+
+// classifyStartup reads a freshly launched pane. trusted means the trust prompt was
+// already answered: its dialog can linger on screen for a moment afterwards, and must not
+// then be mistaken for a question nobody has answered.
+func classifyStartup(pane string, trusted bool) startupState {
+	p := startupPatterns
+	switch {
+	case p.noConversation.MatchString(pane):
+		return startupNoConversation
+	case p.trust.MatchString(pane):
+		if trusted {
+			return startupWaiting
+		}
+		return startupTrust
+	case p.externalImports.MatchString(pane):
+		return startupExternalImports
+	case p.ready.MatchString(pane):
+		return startupReady
+	case p.onboarding.MatchString(pane):
+		return startupOnboarding
+	case p.pendingChoice.MatchString(pane):
+		return startupPendingChoice
+	}
+	return startupWaiting
+}
+
+// screenTail is the last few non-blank lines of a pane, indented for an error message.
+func screenTail(pane string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(pane, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, "    | "+strings.TrimRight(l, " "))
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func tmuxRun(args ...string) error { return exec.Command("tmux", args...).Run() }
@@ -87,6 +144,25 @@ func paneRunningClaude(target string) bool {
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		c := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "-"))
 		if c != "" && !shellCommands[c] {
+			return true
+		}
+	}
+	return false
+}
+
+// claudeProcessName matches Claude Code's own process: it renames itself to its version.
+var claudeProcessName = regexp.MustCompile(`^(claude|\d+\.\d+\.\d+)$`)
+
+// paneShowsClaude reports whether Claude itself is in the foreground, rather than
+// anything that is merely not a shell — a fresh shell runs other commands (`gh auth
+// token`, version managers) while it loads its rc files.
+func paneShowsClaude(target string) bool {
+	out, err := exec.Command("tmux", "list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if claudeProcessName.MatchString(strings.TrimSpace(l)) {
 			return true
 		}
 	}
@@ -233,22 +309,34 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 
 	fmt.Print("  starting")
 	trusted := false
+	hint := "(cd " + dir + " && claude)"
+	if tag != "" {
+		hint = "(cd " + dir + " && CLAUDE_CONFIG_DIR=" + configDir + " claude)"
+	}
+	sawClaude := false
 	for range 40 {
 		pane := capturePane(tn)
+		state := classifyStartup(pane, trusted)
+
+		// Claude exiting during start-up leaves only the shell, which used to be reported
+		// as up once the poll ran out. "Seen running" first, because a fresh shell can
+		// still be loading its rc files before claude even starts.
+		running := paneShowsClaude(tn)
+		sawClaude = sawClaude || running
+		if state == startupNoConversation || (sawClaude && !running && !paneRunningClaude(tn)) {
+			fmt.Println()
+			return fmt.Errorf("%q exited during start-up:\n%s\n  claude did not start", name, screenTail(capturePane(tn), 6))
+		}
 
 		// Accept the trust prompt, then KEEP POLLING: further prompts can follow it,
 		// and breaking out here once reported a session up while it still sat on an
 		// unanswered question.
-		if !trusted && startupPatterns.trust.MatchString(pane) {
+		if state == startupTrust {
 			time.Sleep(300 * time.Millisecond)
 			// Re-capture: the dialog may still have been painting when we matched.
 			if err := selectMenuOption(tn, capturePane(tn), startupPatterns.trustAccept); err != nil {
 				killSession(tn)
 				fmt.Println()
-				hint := "(cd " + dir + " && claude)"
-				if tag != "" {
-					hint = "(cd " + dir + " && CLAUDE_CONFIG_DIR=" + configDir + " claude)"
-				}
 				return fmt.Errorf("%q stopped on the workspace trust prompt and topic could not\n"+
 					"  answer it safely: %v.\n"+
 					"  Declining that prompt quits Claude, so topic will not guess. Start it once\n"+
@@ -259,26 +347,23 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 			trusted = true
 			continue
 		}
-		if startupPatterns.externalImports.MatchString(pane) {
+		if state == startupExternalImports {
 			killSession(tn)
 			fmt.Println()
-			hint := "(cd " + dir + " && claude)"
-			if tag != "" {
-				hint = "(cd " + dir + " && CLAUDE_CONFIG_DIR=" + configDir + " claude)"
-			}
 			return fmt.Errorf("%q needs a one-off decision this profile has not made yet:\n"+
 				"  \"Allow external CLAUDE.md file imports?\" — a security question about\n"+
 				"  imports outside %s, which topic will not answer for you.\n"+
 				"  Start it once by hand, answer it, then retry:\n    %s\n  unanswered startup prompt",
 				name, dir, hint)
 		}
-		if startupPatterns.ready.MatchString(pane) {
-			break
+		if state == startupReady {
+			fmt.Println()
+			return nil
 		}
 		// First-run setup. Waiting is pointless and topic will not choose a theme or
 		// an account, so fail fast rather than leave a session parked at a prompt
 		// that isUp would happily report as UP.
-		if startupPatterns.onboarding.MatchString(pane) {
+		if state == startupOnboarding {
 			killSession(tn)
 			fmt.Println()
 			hint := "claude"
@@ -291,10 +376,23 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 				"  Its config file is %s\n  profile not set up",
 				configDir, hint, configFileOf(configDir))
 		}
+		// Any other question. The session is left running, so the user can answer it
+		// where it sits; it is not up until they do. Found 2026-10-04: a new profile's
+		// "Claude in Chrome" question held 30 moved topics off Remote Control while topic
+		// reported every one of them up.
+		if state == startupPendingChoice {
+			fmt.Println()
+			return fmt.Errorf("%q is waiting on a question topic will not answer for you:\n%s\n"+
+				"  It is still running. Answer it there and it carries on:\n    tmux attach -t %q\n"+
+				"  unanswered startup prompt", name, screenTail(pane, 8), tn)
+		}
 		time.Sleep(500 * time.Millisecond)
 		fmt.Print(".")
 	}
 	fmt.Println()
+	// Slow is not broken — a large transcript can take a while to load — so this stays a
+	// warning. But it must not pass silently as up.
+	fmt.Fprintf(os.Stderr, "  note: %q has not shown it is ready after 20s. Check it:\n    tmux attach -t %q\n", name, tn)
 	return nil
 }
 
