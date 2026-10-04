@@ -18,6 +18,12 @@ and worth not re-deriving if you do.
   `name`, `sessionId`, `cwd`, `tmux`. Best starting point for any "which session is
   this?" question, and what `topic adopt` reads. Records are **not** removed when a
   session exits, so always re-check the pid before trusting one.
+- **`/clear` starts a new session id inside the same process.** The live record's
+  `sessionId` follows it; nothing else tells you. A registry that only records the id a
+  session was launched with therefore drifts, and resuming the recorded id brings back
+  the conversation from before the `/clear`. `topic` re-reads the live record before
+  `down`, `move`, `rename`, `rebridge` and `handoff-swap`, and `ensure-dispatcher` sweeps
+  every live topic every five minutes. The pre-`/clear` id is kept in history.
 - **`CLAUDE_CONFIG_DIR=~/.claude` is not the same as leaving it unset.** The
   *directories* are identical — same `projects/`, `sessions/`, `topics/` — but the
   **config file** is not: unset reads `~/.claude.json`, set reads

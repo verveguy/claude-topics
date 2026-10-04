@@ -83,6 +83,30 @@ func TestSyncSessionIDDryRunChangesNothing(t *testing.T) {
 	}
 }
 
+func TestSyncLiveSessionsFollowsOnlyTheDriftedTopic(t *testing.T) {
+	topicsRoot := t.TempDir()
+	drifted, steady := topicFile(topicsRoot, "Drifted"), topicFile(topicsRoot, "Steady")
+	writeJSON(t, drifted, map[string]any{"name": "Drifted", "sessionId": "before-clear"})
+	writeJSON(t, steady, map[string]any{"name": "Steady", "sessionId": "same"})
+	prev := liveSessionIDOf
+	liveSessionIDOf = func(_, name string) string {
+		if name == "Drifted" {
+			return "after-clear"
+		}
+		return "same"
+	}
+	t.Cleanup(func() { liveSessionIDOf = prev })
+
+	syncLiveSessions(t.TempDir(), topicsRoot)
+
+	if got := scalar(load(drifted)["sessionId"]); got != "after-clear" {
+		t.Errorf("drifted topic sessionId = %q, want the live session", got)
+	}
+	if m := load(steady); scalar(m["sessionId"]) != "same" || m["history"] != nil {
+		t.Errorf("steady topic was rewritten: %v", m)
+	}
+}
+
 func TestSyncSessionIDLeavesADownTopicAlone(t *testing.T) {
 	topicsRoot := t.TempDir()
 	file := topicFile(topicsRoot, "T")

@@ -414,6 +414,18 @@ func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
 	return nil
 }
 
+// syncLiveSessions follows every running topic in a profile to the session it is really
+// on. The commands that call syncSessionID only cover a topic someone acts on; a topic
+// /cleared and then lost to a crash or reboot takes its live id with it. Run on the
+// Dispatcher's five-minute cycle, this keeps that window to five minutes.
+func syncLiveSessions(configDir, topicsRoot string) {
+	for _, name := range topicNames(topicsRoot) {
+		if err := syncSessionID(configDir, topicsRoot, name, false); err != nil {
+			fmt.Fprintf(os.Stderr, "  session sync for %q failed: %v\n", name, err)
+		}
+	}
+}
+
 // remoteControlPatterns key on Claude Code's /remote-control UI. Like startupPatterns,
 // this is the place to look first if Claude Code changes its wording.
 var remoteControlPatterns = struct {

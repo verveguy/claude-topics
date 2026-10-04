@@ -346,6 +346,9 @@ func cmdPath(args []string) error {
 func cmdEnsureDispatcher(args []string) error {
 	need(args, 3, "ensure-dispatcher <name> <config-dir> <topics-root>")
 	name, configDir, topicsRoot := args[0], args[1], args[2]
+	// launchd already runs this every five minutes, so it doubles as the sweep that keeps
+	// the registry on each live topic's real session.
+	defer syncLiveSessions(configDir, topicsRoot)
 	if isUp(profileTag(configDir), name) {
 		fmt.Printf("%q is up.\n", name)
 		return nil
