@@ -261,6 +261,29 @@ cannot be mistaken for missing topics.
 - **[Adopting](docs/guide.md#adopting-an-existing-session)** — bring a session
   `topic` did not launch under management, live or merely resumable.
 
+### Daemons — keeping non-topic processes up
+
+Long-running processes that are not Claude topics, but live like them in their own
+detached tmux session (the Fabrik engines and the Pruefer reviewers), can be registered as
+**daemons**. The Dispatcher's five-minute launchd cycle then keeps them up too:
+
+```bash
+topic daemon add "liminis-daemon" ~/dev/liminis-project daemon-env fabrik --auto-upgrade
+topic daemons                       # each daemon: running, husk (pane back at a shell), or missing
+topic daemon stop "liminis-daemon"  # stop on purpose; the keeper leaves it down
+topic daemon start "liminis-daemon" # and back
+topic ensure-daemons                # just the keeper pass, by hand
+```
+
+On each `ensure-dispatcher` run, a registered daemon whose session is **missing** is created
+with its command, and one whose pane is **back at a shell** has its command typed in again.
+A daemon marked **stopped** is left alone. The registry is per profile
+(`<config dir>/daemons.json`), because the agent that runs the check is per profile; a
+daemon's own `.env` pins the Claude profile its workers use (`daemon-env`), so register it
+under any profile whose Dispatcher agent is loaded. Each start appends
+`echo "[topic] daemon <name> exited with status $?"`, so an exit is visible in the pane:
+daemons have exited without logging why.
+
 ## Getting it
 
 ```bash
