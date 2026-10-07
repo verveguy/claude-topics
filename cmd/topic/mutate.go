@@ -242,7 +242,8 @@ func cmdForget(args []string) error {
 		if err := os.Remove(filepath.Join(dir, "topic.json")); err != nil {
 			return err
 		}
-		os.Remove(dir) // succeeds only if nothing else remains
+		os.Remove(filepath.Join(dir, "topic.json.lock")) // withFileLock's; empty, and only ours
+		os.Remove(dir)                                   // succeeds only if nothing else remains
 		fmt.Printf("Forgot %q.\n", name)
 		if n > 0 {
 			fmt.Printf("  Kept %d document(s) in %s/ (--purge to remove).\n", n, dir)
@@ -375,6 +376,10 @@ func cmdRebridge(args []string) error {
 	}
 
 	for _, t := range targets {
+		// A dry run only reports drift; it must not rewrite sessionId or history.
+		if err := syncSessionID(configDir, topicsRoot, t, dry); err != nil {
+			return err
+		}
 		sid := regGet(topicsRoot, t, "sessionId")
 		if sid == "" {
 			fmt.Printf("  %s: no session — skipping\n", t)

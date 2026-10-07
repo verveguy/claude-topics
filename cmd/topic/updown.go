@@ -233,6 +233,11 @@ func cmdDown(args []string) error {
 		return nil
 	}
 	fmt.Printf("Putting down %q…\n", name)
+	// Last chance: once the process exits, the record of which session it was on goes
+	// with it, and the next `up` would resume whatever the registry last heard of.
+	if err := syncSessionID(configDir, topicsRoot, name, false); err != nil {
+		return err
+	}
 	stopSession(configDir, name)
 	if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()}); err != nil {
 		return err
@@ -288,6 +293,10 @@ func cmdDownAll(args []string) error {
 		did = true
 		if dry {
 			fmt.Printf("  would put down: %s\n", name)
+			// Report a /clear drift the real run would follow; dry, so nothing is written.
+			if err := syncSessionID(configDir, topicsRoot, name, true); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := cmdDown([]string{name, configDir, topicsRoot}); err != nil {
@@ -341,6 +350,9 @@ func cmdPath(args []string) error {
 func cmdEnsureDispatcher(args []string) error {
 	need(args, 3, "ensure-dispatcher <name> <config-dir> <topics-root>")
 	name, configDir, topicsRoot := args[0], args[1], args[2]
+	// launchd already runs this every five minutes, so it doubles as the sweep that keeps
+	// the registry on each live topic's real session.
+	defer syncLiveSessions(configDir, topicsRoot)
 	if isUp(profileTag(configDir), name) {
 		fmt.Printf("%q is up.\n", name)
 		return nil

@@ -230,6 +230,9 @@ func cmdHandoffSwap(args []string) error {
 	}
 
 	file := topicFile(topicsRoot, name)
+	if err := syncSessionID(configDir, topicsRoot, name, false); err != nil {
+		return err
+	}
 	oldSID := regGet(topicsRoot, name, "sessionId")
 	dir := regGet(topicsRoot, name, "dir")
 	if dir == "" {

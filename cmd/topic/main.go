@@ -84,6 +84,28 @@ func cmdGet(args []string) error {
 	return nil
 }
 
+// withFileLock runs fn while holding an exclusive flock on <path>.lock. Registry writes
+// are read-modify-write (load, change a key, save); save itself is atomic, but two
+// writers interleaving their load and save lose one update. The five-minute sweep
+// (ensure-dispatcher's session sync) races up/down/set that way, so every registry RMW
+// takes this lock. The lock file is separate from topic.json because save replaces
+// topic.json by rename, which would drop a lock held on the old inode.
+func withFileLock(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fn() // a registry we cannot lock is still better written than not
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fn()
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
 func cmdSet(args []string) error {
 	need(args, 3, "set <file> <key> <value> [<key> <value>...]")
 	path, kv := args[0], args[1:]
@@ -93,23 +115,27 @@ func cmdSet(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	m := load(path)
-	for i := 0; i < len(kv); i += 2 {
-		m[kv[i]] = kv[i+1]
-	}
-	return save(path, m)
+	return withFileLock(path, func() error {
+		m := load(path)
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return save(path, m)
+	})
 }
 
 func cmdPushHistory(args []string) error {
 	need(args, 3, "push-history <file> <sessionId> <handoffDoc>")
-	m := load(args[0])
-	hist, _ := m["history"].([]any)
-	m["history"] = append(hist, map[string]any{
-		"sessionId":  args[1],
-		"handoffDoc": args[2],
-		"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
+	return withFileLock(args[0], func() error {
+		m := load(args[0])
+		hist, _ := m["history"].([]any)
+		m["history"] = append(hist, map[string]any{
+			"sessionId":  args[1],
+			"handoffDoc": args[2],
+			"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
+		})
+		return save(args[0], m)
 	})
-	return save(args[0], m)
 }
 
 func cmdPushFork(args []string) error {
@@ -117,15 +143,17 @@ func cmdPushFork(args []string) error {
 	if _, err := os.Stat(args[0]); err != nil {
 		return nil // parent not registered: nothing to record on
 	}
-	m := load(args[0])
-	forks, _ := m["forks"].([]any)
-	for _, f := range forks {
-		if scalar(f) == args[1] {
-			return nil
+	return withFileLock(args[0], func() error {
+		m := load(args[0])
+		forks, _ := m["forks"].([]any)
+		for _, f := range forks {
+			if scalar(f) == args[1] {
+				return nil
+			}
 		}
-	}
-	m["forks"] = append(forks, args[1])
-	return save(args[0], m)
+		m["forks"] = append(forks, args[1])
+		return save(args[0], m)
+	})
 }
 
 func cmdStatus(args []string) error {

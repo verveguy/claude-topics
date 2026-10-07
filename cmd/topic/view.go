@@ -186,7 +186,14 @@ func cmdStatusCmd(args []string) error {
 		state = "UP"
 	}
 	fmt.Printf("%s  [%s]\n", name, state)
-	return cmdStatus([]string{file})
+	if err := cmdStatus([]string{file}); err != nil {
+		return err
+	}
+	if live := liveSessionIDOf(configDir, name); live != "" && live != scalar(load(file)["sessionId"]) {
+		fmt.Printf("  live session: %s — not the recorded one (a /clear starts a new session);\n"+
+			"    down, move, rename, rebridge and handoff-swap will follow it\n", live)
+	}
+	return nil
 }
 
 // profiles <active-config-dir>

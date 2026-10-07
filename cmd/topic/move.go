@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // move and rename. Both are "put down, change something structural, bring back up",
@@ -156,6 +157,9 @@ func cmdMove(args []string) error {
 	if fileExists(filepath.Join(dstDir, "topic.json")) {
 		return fmt.Errorf("move: %q already exists in %s (%s)", name, dst, dstDir)
 	}
+	if err := syncSessionID(configDir, topicsRoot, name, dry); err != nil {
+		return err
+	}
 
 	// An ADOPTED topic runs outside tmux, so isUp cannot see it. Moving its transcript
 	// while the process still holds it open would corrupt it — and unlike a managed
@@ -239,8 +243,14 @@ func cmdMove(args []string) error {
 	// whole picture and a real run does not stop half-done.
 	type mv struct{ from, to string }
 	var moves []mv
+	curSID, curMissing := regGet(topicsRoot, name, "sessionId"), false
 	for _, sid := range sessionIDsOf(filepath.Join(srcDir, "topic.json")) {
 		tr := transcriptOf(configDir, sid)
+		if tr == "" && sid == curSID && wasUp {
+			curMissing = true
+			fmt.Printf("  transcript %s…: not written yet — will look again once the session has stopped\n", truncate(sid, 8))
+			continue
+		}
 		if tr == "" {
 			fmt.Printf("  transcript %s…: not found in this profile (already gone) — skipping\n", truncate(sid, 8))
 			continue
@@ -277,6 +287,26 @@ func cmdMove(args []string) error {
 		// recreates a stub there after the move.
 		for _, m := range moves {
 			settle(m.from)
+		}
+		// A running session can hold its transcript back and write it out as it exits.
+		// Found 2026-10-04: a move found nothing to carry, the session then wrote its whole
+		// transcript at the old path, and the moved topic had nothing to resume.
+		if curMissing {
+			tr := ""
+			for range 10 {
+				if tr = transcriptOf(configDir, curSID); tr != "" {
+					break
+				}
+				time.Sleep(300 * time.Millisecond)
+			}
+			if tr != "" {
+				settle(tr)
+				rel := filepath.Base(filepath.Dir(tr))
+				moves = append(moves, mv{tr, filepath.Join(dst, "projects", rel, curSID+".jsonl")})
+				fmt.Printf("  transcript %s…: written as the session stopped — moving it too\n", truncate(curSID, 8))
+			} else {
+				fmt.Printf("  transcript %s…: still none after the session stopped — the moved topic has nothing to resume\n", truncate(curSID, 8))
+			}
 		}
 		fmt.Println()
 	}
@@ -466,6 +496,9 @@ func cmdRename(args []string) error {
 	}
 
 	tag := profileTag(configDir)
+	if err := syncSessionID(configDir, topicsRoot, old, dry); err != nil {
+		return err
+	}
 	sid := regGet(topicsRoot, old, "sessionId")
 	tr := transcriptOf(configDir, sid)
 	wasUp := isUp(tag, old)
