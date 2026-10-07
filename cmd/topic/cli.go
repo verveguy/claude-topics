@@ -68,8 +68,20 @@ what makes hand-off possible.
   topic cycle down | up       Take every profile's topics down cleanly, and bring
                               them back — agents included. Two verbs, because the
                               point is what you do in between (log in/out, upgrade).
-  topic ensure-dispatcher     Start the Dispatcher topic if it is not up.
+  topic ensure-dispatcher     Start the Dispatcher topic if it is not up, and restart
+                              this profile's registered daemons that are down.
                               (Run by launchd at login and every 5 minutes.)
+  topic ensure-daemons        Just the daemon half of ensure-dispatcher: restart any
+                              of this profile's registered daemons that are down.
+  topic daemons               List this profile's daemons (<config dir>/daemons.json):
+                              long-running non-topic processes in their own tmux
+                              sessions (Fabrik engines, Pruefer), and their state.
+  topic daemon add "<name>" <dir> <command...>
+                              Register a daemon: its tmux session name, directory, and
+                              the command typed into its shell to start it.
+  topic daemon stop|start|remove "<name>"
+                              Stop on purpose (the keeper then leaves it down), start
+                              again, or drop it from the registry.
   topic doctor                Whether this binary can hold a macOS permission
                               decision — run it if a dialog keeps naming ` + "`topic`" + `.
 
@@ -189,6 +201,12 @@ func main() {
 		// ~/Library/Logs/claude-dispatcher*.log, which is where you would look.
 		warnIfUnsigned()
 		err = cmdEnsureDispatcher([]string{p.dispatcher, p.configDir, p.topicsRoot})
+	case "daemons":
+		err = cmdDaemons([]string{p.configDir})
+	case "ensure-daemons":
+		ensureDaemons(p.configDir)
+	case "daemon":
+		err = cmdDaemon(append(args, p.configDir))
 	case "doctor":
 		err = cmdDoctor(args)
 

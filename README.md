@@ -261,6 +261,36 @@ cannot be mistaken for missing topics.
 - **[Adopting](docs/guide.md#adopting-an-existing-session)** — bring a session
   `topic` did not launch under management, live or merely resumable.
 
+### Daemons — keeping non-topic processes up
+
+Long-running processes that are not Claude topics, but live like them in their own
+detached tmux session (the Fabrik engines and the Pruefer reviewers), can be registered as
+**daemons**. The Dispatcher's five-minute launchd cycle then keeps them up too:
+
+```bash
+topic daemon add "liminis-daemon" ~/dev/liminis-project daemon-env fabrik --auto-upgrade
+topic daemons                       # each daemon: running, husk (pane back at a shell), or missing
+topic daemon stop "liminis-daemon"  # stop on purpose; the keeper leaves it down
+topic daemon start "liminis-daemon" # and back
+topic ensure-daemons                # just the keeper pass, by hand
+```
+
+On each `ensure-dispatcher` run, a registered daemon whose session is **missing** is created
+with its command, and one whose pane is **back at a shell** has its command typed in again.
+A pane counts as back at a shell only when its shell is in the foreground *and* has no
+child processes, so a daemon running under a wrapper script that doesn't `exec` is not
+mistaken for a husk. The flip side: a husk whose shell still has a leftover background
+job is treated as running and not restarted.
+
+`daemon add` takes the command either as **one** argument, a complete shell line stored
+verbatim (`topic daemon add x ~/d "sh -c 'fabrik --name \"a b\"'"`), or as **several**,
+an argv that is shell-quoted word by word so it means exactly what you passed. A daemon marked **stopped** is left alone. The registry is per profile
+(`<config dir>/daemons.json`), because the agent that runs the check is per profile; a
+daemon's own `.env` pins the Claude profile its workers use (`daemon-env`), so register it
+under any profile whose Dispatcher agent is loaded. Each start appends
+`echo "[topic] daemon <name> exited with status $?"`, so an exit is visible in the pane:
+daemons have exited without logging why.
+
 ## Getting it
 
 ```bash

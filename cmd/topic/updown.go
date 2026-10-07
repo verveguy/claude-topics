@@ -353,6 +353,9 @@ func cmdEnsureDispatcher(args []string) error {
 	// launchd already runs this every five minutes, so it doubles as the sweep that keeps
 	// the registry on each live topic's real session.
 	defer syncLiveSessions(configDir, topicsRoot)
+	// And it is the keeper for the profile's daemons (Fabrik, Pruefer): the same
+	// five-minute cycle restarts any that are down. See daemons.go.
+	defer ensureDaemons(configDir)
 	if isUp(profileTag(configDir), name) {
 		fmt.Printf("%q is up.\n", name)
 		return nil
