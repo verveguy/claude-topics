@@ -60,6 +60,21 @@ func TestStartLineReportsExit(t *testing.T) {
 	}
 }
 
+// Re-adding a daemon to change its command keeps a deliberate stop (review on #6).
+func TestDaemonReAddKeepsStopped(t *testing.T) {
+	cfg, dir := t.TempDir(), t.TempDir()
+	if err := saveDaemons(cfg, []daemonSpec{{Name: "x", Dir: dir, Command: "old", Stopped: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdDaemon([]string{"add", "x", dir, "new", cfg}); err != nil {
+		t.Fatal(err)
+	}
+	ds, _ := loadDaemons(cfg)
+	if len(ds) != 1 || ds[0].Command != "new" || !ds[0].Stopped {
+		t.Errorf("re-add = %+v, want command updated and still stopped", ds)
+	}
+}
+
 // daemon add must not lose the caller's quoting (review on #6): an argv is re-quoted,
 // a single argument is a shell line kept as is, and plain words stay readable.
 func TestDaemonCommandPreservesMeaning(t *testing.T) {

@@ -277,11 +277,17 @@ func cmdDaemon(args []string) error {
 		}
 		d := daemonSpec{Name: name, Dir: dir, Command: cmd}
 		if idx >= 0 {
+			// Re-adding is how a command is edited; it must not undo a deliberate stop,
+			// or the next keeper pass would start a daemon someone stopped on purpose.
+			d.Stopped = ds[idx].Stopped
 			ds[idx] = d
 		} else {
 			ds = append(ds, d)
 		}
 		fmt.Printf("Registered daemon %q: %s (in %s).\n", name, cmd, dir)
+		if d.Stopped {
+			fmt.Printf("It stays stopped; `topic daemon start %q` brings it up.\n", name)
+		}
 		return saveDaemons(configDir, ds)
 	case "remove":
 		if idx < 0 {
