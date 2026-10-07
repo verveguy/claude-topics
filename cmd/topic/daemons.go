@@ -206,6 +206,24 @@ func ensureDaemons(configDir string) {
 	}
 }
 
+// daemonCommand turns `daemon add`'s command arguments into the line typed into the
+// shell. One argument is taken as a complete shell command line, stored verbatim — the
+// way to register pipes, `;`, or deliberate quoting. Several arguments are an argv,
+// each shell-quoted so the stored line means exactly what was passed: joining them with
+// spaces would drop the quoting the caller's shell already removed (`sh -c "a b"`
+// would come back as `sh -c a b`). Words needing no quotes are left bare, so ordinary
+// commands read naturally in daemons.json.
+func daemonCommand(words []string) string {
+	if len(words) == 1 {
+		return words[0]
+	}
+	q := make([]string, len(words))
+	for i, w := range words {
+		q[i] = shellQuote(w)
+	}
+	return strings.Join(q, " ")
+}
+
 // cmdDaemons lists the profile's daemons and their state.
 //
 //	daemons <config-dir>
@@ -250,7 +268,7 @@ func cmdDaemon(args []string) error {
 	switch verb {
 	case "add":
 		need(args, 5, `daemon add "<name>" <dir> <command...>`)
-		dir, cmd := args[2], strings.Join(args[3:len(args)-1], " ")
+		dir, cmd := args[2], daemonCommand(args[3:len(args)-1])
 		if abs, err := filepath.Abs(dir); err == nil {
 			dir = abs
 		}

@@ -279,7 +279,12 @@ On each `ensure-dispatcher` run, a registered daemon whose session is **missing*
 with its command, and one whose pane is **back at a shell** has its command typed in again.
 A pane counts as back at a shell only when its shell is in the foreground *and* has no
 child processes, so a daemon running under a wrapper script that doesn't `exec` is not
-mistaken for a husk. A daemon marked **stopped** is left alone. The registry is per profile
+mistaken for a husk. The flip side: a husk whose shell still has a leftover background
+job is treated as running and not restarted.
+
+`daemon add` takes the command either as **one** argument, a complete shell line stored
+verbatim (`topic daemon add x ~/d "sh -c 'fabrik --name \"a b\"'"`), or as **several**,
+an argv that is shell-quoted word by word so it means exactly what you passed. A daemon marked **stopped** is left alone. The registry is per profile
 (`<config dir>/daemons.json`), because the agent that runs the check is per profile; a
 daemon's own `.env` pins the Claude profile its workers use (`daemon-env`), so register it
 under any profile whose Dispatcher agent is loaded. Each start appends

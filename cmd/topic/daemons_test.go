@@ -59,3 +59,22 @@ func TestStartLineReportsExit(t *testing.T) {
 		t.Errorf("startLine = %q", l)
 	}
 }
+
+// daemon add must not lose the caller's quoting (review on #6): an argv is re-quoted,
+// a single argument is a shell line kept as is, and plain words stay readable.
+func TestDaemonCommandPreservesMeaning(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"daemon-env", "fabrik", "--auto-upgrade"}, "daemon-env fabrik --auto-upgrade"},
+		{[]string{"daemon-env", "/Users/bpja/dev/fabrik/bin/pruefer"}, "daemon-env /Users/bpja/dev/fabrik/bin/pruefer"},
+		{[]string{"sh", "-c", "fabrik --name 'a b'"}, `sh -c 'fabrik --name '"'"'a b'"'"''`},
+		{[]string{"daemon-env fabrik --auto-upgrade; true"}, "daemon-env fabrik --auto-upgrade; true"},
+	}
+	for _, c := range cases {
+		if got := daemonCommand(c.in); got != c.want {
+			t.Errorf("daemonCommand(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
