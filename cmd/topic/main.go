@@ -126,14 +126,16 @@ func cmdSet(args []string) error {
 
 func cmdPushHistory(args []string) error {
 	need(args, 3, "push-history <file> <sessionId> <handoffDoc>")
-	m := load(args[0])
-	hist, _ := m["history"].([]any)
-	m["history"] = append(hist, map[string]any{
-		"sessionId":  args[1],
-		"handoffDoc": args[2],
-		"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
+	return withFileLock(args[0], func() error {
+		m := load(args[0])
+		hist, _ := m["history"].([]any)
+		m["history"] = append(hist, map[string]any{
+			"sessionId":  args[1],
+			"handoffDoc": args[2],
+			"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
+		})
+		return save(args[0], m)
 	})
-	return save(args[0], m)
 }
 
 func cmdPushFork(args []string) error {
@@ -141,15 +143,17 @@ func cmdPushFork(args []string) error {
 	if _, err := os.Stat(args[0]); err != nil {
 		return nil // parent not registered: nothing to record on
 	}
-	m := load(args[0])
-	forks, _ := m["forks"].([]any)
-	for _, f := range forks {
-		if scalar(f) == args[1] {
-			return nil
+	return withFileLock(args[0], func() error {
+		m := load(args[0])
+		forks, _ := m["forks"].([]any)
+		for _, f := range forks {
+			if scalar(f) == args[1] {
+				return nil
+			}
 		}
-	}
-	m["forks"] = append(forks, args[1])
-	return save(args[0], m)
+		m["forks"] = append(forks, args[1])
+		return save(args[0], m)
+	})
 }
 
 func cmdStatus(args []string) error {
