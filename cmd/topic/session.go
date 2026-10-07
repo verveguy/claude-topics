@@ -491,8 +491,10 @@ func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
 // would otherwise log the same "no transcript yet" line every five minutes until the
 // /clear'd session gets its first message.
 func syncSessionIDOpt(configDir, topicsRoot, name string, dry, quiet bool) error {
-	live := liveSessionIDOf(configDir, name)
+	// Read the registry first: the write below re-checks it under the lock, so anything
+	// that changes it from here on wins over this sync.
 	reg := regGet(topicsRoot, name, "sessionId")
+	live := liveSessionIDOf(configDir, name)
 	if live == "" || live == reg {
 		return nil
 	}
