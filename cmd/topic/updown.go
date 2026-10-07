@@ -293,6 +293,10 @@ func cmdDownAll(args []string) error {
 		did = true
 		if dry {
 			fmt.Printf("  would put down: %s\n", name)
+			// Report a /clear drift the real run would follow; dry, so nothing is written.
+			if err := syncSessionID(configDir, topicsRoot, name, true); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := cmdDown([]string{name, configDir, topicsRoot}); err != nil {

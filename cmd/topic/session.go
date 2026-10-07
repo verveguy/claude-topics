@@ -433,15 +433,18 @@ func liveSessionID(configDir, name string) string {
 	if err != nil {
 		return ""
 	}
-	var pids []int
+	// launchSession types the command into a shell, so Claude is the pane's child: try
+	// the children first. The shell itself goes last, because session records outlive
+	// their processes and pids are recycled — a shell that inherited a dead Claude's pid
+	// would otherwise match that Claude's stale record ahead of the live one.
+	var kids, shells []int
 	for _, f := range strings.Fields(string(out)) {
 		if p := atoi(f); p > 0 {
-			// launchSession types the command into a shell, so Claude is the pane's child.
-			pids = append(pids, p)
-			pids = append(pids, childPids(p)...)
+			kids = append(kids, childPids(p)...)
+			shells = append(shells, p)
 		}
 	}
-	return sessionIDOfPids(configDir, pids)
+	return sessionIDOfPids(configDir, append(kids, shells...))
 }
 
 func childPids(pid int) []int {

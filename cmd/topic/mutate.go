@@ -375,7 +375,8 @@ func cmdRebridge(args []string) error {
 	}
 
 	for _, t := range targets {
-		if err := syncSessionID(configDir, topicsRoot, t, false); err != nil {
+		// A dry run only reports drift; it must not rewrite sessionId or history.
+		if err := syncSessionID(configDir, topicsRoot, t, dry); err != nil {
 			return err
 		}
 		sid := regGet(topicsRoot, t, "sessionId")
