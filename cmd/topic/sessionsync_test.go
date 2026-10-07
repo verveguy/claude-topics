@@ -154,3 +154,28 @@ func TestSyncSessionIDLeavesADownTopicAlone(t *testing.T) {
 		t.Errorf("syncSessionID changed a topic with nothing running: %v", m)
 	}
 }
+
+// The sweep reads the registry, decides, then writes. If another command (up, down,
+// rename) changes the session in between, that write must win: the sync re-checks under
+// the lock and stands down instead of saving a stale copy over it (review on #5).
+func TestSyncSessionIDStandsDownIfTheRegistryChangedMeanwhile(t *testing.T) {
+	topicsRoot := t.TempDir()
+	file := topicFile(topicsRoot, "T")
+	writeJSON(t, file, map[string]any{"name": "T", "sessionId": "before-clear", "state": "up"})
+	configDir := t.TempDir()
+	withTranscript(t, configDir, "after-clear")
+	prev := liveSessionIDOf
+	liveSessionIDOf = func(string, string) string {
+		// Another command lands between the sync's read and its write.
+		writeJSON(t, file, map[string]any{"name": "T", "sessionId": "someone-else", "state": "down"})
+		return "after-clear"
+	}
+	t.Cleanup(func() { liveSessionIDOf = prev })
+
+	if err := syncSessionID(configDir, topicsRoot, "T", false); err != nil {
+		t.Fatal(err)
+	}
+	if m := load(file); scalar(m["sessionId"]) != "someone-else" || scalar(m["state"]) != "down" {
+		t.Errorf("sync overwrote a concurrent change: %v", m)
+	}
+}

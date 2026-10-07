@@ -484,6 +484,13 @@ var liveSessionIDOf = liveSessionID
 // a /clear and strand the live one: a move carried the stale transcript across and left
 // the real one behind, and the next `up` resumed the old conversation.
 func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
+	return syncSessionIDOpt(configDir, topicsRoot, name, dry, false)
+}
+
+// syncSessionIDOpt is syncSessionID with a quiet switch for the unattended sweep, which
+// would otherwise log the same "no transcript yet" line every five minutes until the
+// /clear'd session gets its first message.
+func syncSessionIDOpt(configDir, topicsRoot, name string, dry, quiet bool) error {
 	live := liveSessionIDOf(configDir, name)
 	reg := regGet(topicsRoot, name, "sessionId")
 	if live == "" || live == reg {
@@ -495,6 +502,9 @@ func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
 	// at start-up. Keep the recorded id until the live one has a transcript to resume;
 	// a later sync (every five minutes, or at down/move/rename) follows it then.
 	if transcriptOf(configDir, live) == "" {
+		if quiet {
+			return nil
+		}
 		fmt.Printf("  session: %q is running %s…, but it has no transcript yet (a fresh /clear\n"+
 			"    writes one on its first message) — keeping the recorded %s… for now.\n",
 			name, truncate(live, 8), truncate(reg, 8))
@@ -507,17 +517,27 @@ func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
 		return nil
 	}
 	file := topicFile(topicsRoot, name)
-	m := load(file)
-	if reg != "" {
-		hist, _ := m["history"].([]any)
-		m["history"] = append(hist, map[string]any{
-			"sessionId":  reg,
-			"replacedBy": "clear",
-			"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
-		})
-	}
-	m["sessionId"] = live
-	if err := save(file, m); err != nil {
+	changed := false
+	err := withFileLock(file, func() error {
+		m := load(file)
+		// Re-check under the lock: if another command changed the session since we
+		// read it, that write wins and this sync stands down.
+		if scalar(m["sessionId"]) != reg {
+			return nil
+		}
+		if reg != "" {
+			hist, _ := m["history"].([]any)
+			m["history"] = append(hist, map[string]any{
+				"sessionId":  reg,
+				"replacedBy": "clear",
+				"retiredAt":  time.Now().Format("2006-01-02T15:04:05-07:00"),
+			})
+		}
+		m["sessionId"] = live
+		changed = true
+		return save(file, m)
+	})
+	if err != nil || !changed {
 		return err
 	}
 	fmt.Printf("  session: %q is running %s…, not the recorded %s… (a /clear starts a new\n"+
@@ -532,7 +552,7 @@ func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
 // Dispatcher's five-minute cycle, this keeps that window to five minutes.
 func syncLiveSessions(configDir, topicsRoot string) {
 	for _, name := range topicNames(topicsRoot) {
-		if err := syncSessionID(configDir, topicsRoot, name, false); err != nil {
+		if err := syncSessionIDOpt(configDir, topicsRoot, name, false, true); err != nil {
 			fmt.Fprintf(os.Stderr, "  session sync for %q failed: %v\n", name, err)
 		}
 	}
