@@ -277,7 +277,9 @@ topic ensure-daemons                # just the keeper pass, by hand
 
 On each `ensure-dispatcher` run, a registered daemon whose session is **missing** is created
 with its command, and one whose pane is **back at a shell** has its command typed in again.
-A daemon marked **stopped** is left alone. The registry is per profile
+A pane counts as back at a shell only when its shell is in the foreground *and* has no
+child processes, so a daemon running under a wrapper script that doesn't `exec` is not
+mistaken for a husk. A daemon marked **stopped** is left alone. The registry is per profile
 (`<config dir>/daemons.json`), because the agent that runs the check is per profile; a
 daemon's own `.env` pins the Claude profile its workers use (`daemon-env`), so register it
 under any profile whose Dispatcher agent is loaded. Each start appends

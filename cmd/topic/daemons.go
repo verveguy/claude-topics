@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -90,15 +91,40 @@ const (
 
 // daemonState inspects tmux. It reuses paneRunningClaude, which despite its name asks
 // the general question this needs: is anything other than a shell in the foreground?
+//
+// A shell in the foreground is not enough to call it a husk, though. A daemon started
+// through a wrapper script that does not `exec` its program shows the wrapper's shell
+// (`bash`, `sh`) as the foreground command while the daemon runs underneath it. Typing
+// the start line into that would feed the live daemon stray input, or start a second
+// copy. So a pane is a husk only when its shell is in the foreground AND has no child
+// processes: an idle prompt. (`daemon-env` does exec, so registered Fabrik and Pruefer
+// commands show their own names; this guards the wrappers that don't.)
 func daemonState(name string) string {
 	switch {
 	case !sessionExists(name):
 		return daemonMissing
 	case paneRunningClaude(name):
 		return daemonRunning
+	case paneShellHasChildren(name):
+		return daemonRunning
 	default:
 		return daemonHusk
 	}
+}
+
+// paneShellHasChildren reports whether any pane's shell process has a child: something is
+// running under it even though the shell is what tmux reports in the foreground.
+func paneShellHasChildren(name string) bool {
+	out, err := exec.Command("tmux", "list-panes", "-t", "="+name, "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return false
+	}
+	for _, f := range strings.Fields(string(out)) {
+		if p := atoi(f); p > 0 && len(childPids(p)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // daemonAction is what the keeper should do for a daemon in a given state. Pure, so
