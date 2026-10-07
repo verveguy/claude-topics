@@ -43,6 +43,19 @@ func TestSessionIDOfPidsIgnoresStaleRecords(t *testing.T) {
 	}
 }
 
+// withTranscript gives a session a transcript in configDir, as Claude Code does on the
+// session's first message.
+func withTranscript(t *testing.T, configDir, sid string) {
+	t.Helper()
+	dir := filepath.Join(configDir, "projects", "-test-project")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func withLiveSession(t *testing.T, sid string) {
 	t.Helper()
 	prev := liveSessionIDOf
@@ -55,8 +68,10 @@ func TestSyncSessionIDFollowsAClear(t *testing.T) {
 	file := topicFile(topicsRoot, "T")
 	writeJSON(t, file, map[string]any{"name": "T", "sessionId": "before-clear"})
 	withLiveSession(t, "after-clear")
+	configDir := t.TempDir()
+	withTranscript(t, configDir, "after-clear")
 
-	if err := syncSessionID(t.TempDir(), topicsRoot, "T", false); err != nil {
+	if err := syncSessionID(configDir, topicsRoot, "T", false); err != nil {
 		t.Fatal(err)
 	}
 	m := load(file)
@@ -66,6 +81,22 @@ func TestSyncSessionIDFollowsAClear(t *testing.T) {
 	// The pre-/clear conversation must stay resumable, and travel with a move.
 	if ids := sessionIDsOf(file); len(ids) != 2 || ids[1] != "before-clear" {
 		t.Errorf("sessionIDsOf = %v, want the replaced session kept in history", ids)
+	}
+}
+
+// A fresh /clear session has no transcript until its first message. Following it then
+// would leave the registry on an id that `up --resume` cannot open (review on #5).
+func TestSyncSessionIDWaitsForTheLiveTranscript(t *testing.T) {
+	topicsRoot := t.TempDir()
+	file := topicFile(topicsRoot, "T")
+	writeJSON(t, file, map[string]any{"name": "T", "sessionId": "before-clear"})
+	withLiveSession(t, "after-clear")
+
+	if err := syncSessionID(t.TempDir(), topicsRoot, "T", false); err != nil {
+		t.Fatal(err)
+	}
+	if m := load(file); scalar(m["sessionId"]) != "before-clear" || m["history"] != nil {
+		t.Errorf("followed a session with no transcript: %v", m)
 	}
 }
 
@@ -96,8 +127,10 @@ func TestSyncLiveSessionsFollowsOnlyTheDriftedTopic(t *testing.T) {
 		return "same"
 	}
 	t.Cleanup(func() { liveSessionIDOf = prev })
+	configDir := t.TempDir()
+	withTranscript(t, configDir, "after-clear")
 
-	syncLiveSessions(t.TempDir(), topicsRoot)
+	syncLiveSessions(configDir, topicsRoot)
 
 	if got := scalar(load(drifted)["sessionId"]); got != "after-clear" {
 		t.Errorf("drifted topic sessionId = %q, want the live session", got)

@@ -489,6 +489,17 @@ func syncSessionID(configDir, topicsRoot, name string, dry bool) error {
 	if live == "" || live == reg {
 		return nil
 	}
+	// A fresh /clear session may not have written its transcript yet: Claude Code
+	// creates the jsonl on the first message, not at /clear. Pointing the registry at it
+	// then would make the next `up` --resume a session with no conversation, which fails
+	// at start-up. Keep the recorded id until the live one has a transcript to resume;
+	// a later sync (every five minutes, or at down/move/rename) follows it then.
+	if transcriptOf(configDir, live) == "" {
+		fmt.Printf("  session: %q is running %s…, but it has no transcript yet (a fresh /clear\n"+
+			"    writes one on its first message) — keeping the recorded %s… for now.\n",
+			name, truncate(live, 8), truncate(reg, 8))
+		return nil
+	}
 	if dry {
 		fmt.Printf("  session: %q is running %s…, not the recorded %s… (a /clear starts a new\n"+
 			"    session) — the real run will follow it; this plan shows the recorded one.\n",
