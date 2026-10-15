@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -35,14 +34,13 @@ func detachSwap(name, doc, focus, configDir, topicsRoot string) error {
 	}
 	cmd := exec.Command(self, args...)
 	cmd.Env = append(os.Environ(), "CLAUDE_TOPICS_ROOT="+topicsRoot)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	// The detached half logs where a human can find it if a swap ever goes wrong.
 	if f, err := os.OpenFile(filepath.Join(topicDir(topicsRoot, name), "swap.log"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		fmt.Fprintf(f, "\n=== %s: detached swap for %q\n", nowISO(), name)
 		cmd.Stdout, cmd.Stderr = f, f
 	}
-	return cmd.Start()
+	return startDetached(cmd)
 }
 
 // newestDoc returns the most recent .md in a topic's subdirectory, or "".

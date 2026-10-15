@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -99,10 +98,10 @@ func withFileLock(path string, fn func() error) error {
 		return fn() // a registry we cannot lock is still better written than not
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFile(f); err != nil {
 		return fn()
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer unlockFile(f)
 	return fn()
 }
 
@@ -255,14 +254,6 @@ func cmdSessions(args []string) error {
 		fmt.Printf("%s\t%s\t%s\t%s\n", pid, sid, scalar(d["cwd"]), scalar(d["name"]))
 	}
 	return nil
-}
-
-func alive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // ---------------------------------------------------------------- transcripts

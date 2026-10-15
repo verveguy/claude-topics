@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -157,10 +156,10 @@ func recordLaunch(launchErr error, record func() error) error {
 	return launchErr
 }
 
-func tmuxRun(args ...string) error { return exec.Command("tmux", args...).Run() }
+func tmuxRun(args ...string) error { return tmuxCmd(args...).Run() }
 
 func capturePane(target string) string {
-	out, err := exec.Command("tmux", "capture-pane", "-t", target, "-p").Output()
+	out, err := tmuxCmd("capture-pane", "-t", target, "-p").Output()
 	if err != nil {
 		return ""
 	}
@@ -202,17 +201,28 @@ var shellCommands = map[string]bool{
 // panes. launchSession deliberately leaves the shell alive when Claude exits, so this
 // is what separates a live topic from the husk left behind by one that quit.
 func paneRunningClaude(target string) bool {
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		c := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "-"))
-		if c != "" && !shellCommands[c] {
+		if c := paneCommandName(l); c != "" && !shellCommands[c] {
 			return true
 		}
 	}
 	return false
+}
+
+// paneCommandName reduces #{pane_current_command} to a bare, lower-case program name.
+// On Windows, MSYS2's tmux reports MSYS programs bare ("bash") but a NATIVE program by
+// its full Windows path, escaped: C:\\Users\\me\\.local\\bin\\claude.exe. Seen
+// 2026-10-15 on windoze. A login shell's leading "-" goes too.
+func paneCommandName(s string) string {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "-")
+	if i := strings.LastIndexAny(s, `/\`); i >= 0 {
+		s = s[i+1:]
+	}
+	return strings.TrimSuffix(strings.ToLower(s), ".exe")
 }
 
 // claudeProcessName matches Claude Code's own process: it renames itself to its version.
@@ -222,12 +232,12 @@ var claudeProcessName = regexp.MustCompile(`^(claude|\d+\.\d+\.\d+)$`)
 // anything that is merely not a shell — a fresh shell runs other commands (`gh auth
 // token`, version managers) while it loads its rc files.
 func paneShowsClaude(target string) bool {
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if claudeProcessName.MatchString(strings.TrimSpace(l)) {
+		if claudeProcessName.MatchString(paneCommandName(l)) {
 			return true
 		}
 	}
@@ -380,7 +390,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 	if sessionExists(tn) {
 		killSession(tn)
 	}
-	if err := tmuxRun("new-session", "-d", "-s", tn, "-c", dir); err != nil {
+	if err := tmuxStartSession(append([]string{"new-session", "-d", "-s", tn, "-c", tmuxDir(dir)}, tmuxShell()...)...); err != nil {
 		return fmt.Errorf("creating tmux session %q: %w", tn, err)
 	}
 	if err := tmuxRun("send-keys", "-t", tn, cmd, "Enter"); err != nil {
@@ -530,7 +540,7 @@ func stopSession(configDir, name string) {
 // the registry has never heard of.
 func liveSessionID(configDir, name string) string {
 	tn := tmuxName(profileTag(configDir), name)
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return ""
 	}
@@ -546,17 +556,6 @@ func liveSessionID(configDir, name string) string {
 		}
 	}
 	return sessionIDOfPids(configDir, append(kids, shells...))
-}
-
-func childPids(pid int) []int {
-	out, _ := exec.Command("pgrep", "-P", strconv.Itoa(pid)).Output()
-	var kids []int
-	for _, f := range strings.Fields(string(out)) {
-		if k := atoi(f); k > 0 {
-			kids = append(kids, k)
-		}
-	}
-	return kids
 }
 
 // sessionIDOfPids returns the session id recorded for the first of pids that is alive

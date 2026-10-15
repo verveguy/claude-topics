@@ -49,7 +49,11 @@ func TestDispatcherDirFallbackIsNotHome(t *testing.T) {
 	}
 	t.Setenv("CLAUDE_DISPATCHER_DIR", "")
 	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp) // keep the fallback inside the test's own temp dir
+	// Keep the fallback inside the test's own temp dir. os.TempDir reads TMPDIR on Unix
+	// but TMP/TEMP on Windows, where setting TMPDIR alone left it in the real %TEMP%.
+	for _, v := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(v, tmp)
+	}
 
 	// A regular file where the config dir should be makes MkdirAll fail.
 	configDir := filepath.Join(t.TempDir(), "not-a-dir")
