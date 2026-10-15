@@ -158,7 +158,10 @@ $arguments = "--headless cmd.exe /d /c $sets$topicExe ensure-dispatcher >> $LogP
 # as a backreference, so an account name ending in $ (a machine account) or a $ in a path
 # would otherwise corrupt the rendered XML without a word.
 $sub = { param($s) [Security.SecurityElement]::Escape($s) -replace '\$', '$$$$' }
-$user = "$env:USERDOMAIN\$env:USERNAME"
+# Ask Windows who is running this, not $env:USERDOMAIN: over SSH that reads WORKGROUP
+# on a non-domain machine, and Task Scheduler rejects WORKGROUP\<user> ("No mapping
+# between account names and security IDs"). Seen installing on windoze over SSH.
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $xml = (Get-Content -Raw (Join-Path $Repo 'windows\claude-dispatcher.xml.template')) `
     -replace '__USER__', (& $sub $user) `
     -replace '__CONFIG_DIR__', (& $sub $ClaudeDir) `
