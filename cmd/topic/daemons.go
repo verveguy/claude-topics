@@ -148,15 +148,6 @@ func startLine(d daemonSpec) string {
 	return fmt.Sprintf(`%s; echo "[topic] daemon %s exited with status $?"`, d.Command, d.Name)
 }
 
-// userShell is the shell daemons run under: the user's own, so PATH and rc files match
-// what an interactive start would have had.
-func userShell() string {
-	if s := os.Getenv("SHELL"); s != "" {
-		return s
-	}
-	return defaultShell
-}
-
 // startDaemon starts a daemon in its session.
 //
 // A new session is created with the command as its program — a login+interactive shell

@@ -50,8 +50,14 @@ func childPids(pid int) []int {
 	return kids
 }
 
-// defaultShell is the daemon shell when $SHELL is unset.
-const defaultShell = "/bin/zsh"
+// userShell is the shell daemons run under: the user's own, so PATH and rc files match
+// what an interactive start would have had.
+func userShell() string {
+	if s := os.Getenv("SHELL"); s != "" {
+		return s
+	}
+	return "/bin/zsh"
+}
 
 func tmuxCmd(args ...string) *exec.Cmd { return exec.Command("tmux", args...) }
 

@@ -139,8 +139,10 @@ func msysWinPid(pid int) int {
 	return atoi(strings.TrimSpace(string(out)))
 }
 
-// defaultShell is the daemon shell when $SHELL is unset: MSYS2's bash, as in tmuxShell.
-const defaultShell = "/usr/bin/bash"
+// userShell is always MSYS2's bash, as in tmuxShell. $SHELL cannot be trusted here: over
+// SSH, OpenSSH sets it to its configured shell (powershell.exe on windoze), and a daemon
+// started as `powershell.exe -lic ...` dies at once. Seen 2026-10-15.
+func userShell() string { return "/usr/bin/bash" }
 
 // tmuxBin finds MSYS2's tmux: TOPIC_TMUX, then PATH, then the default MSYS2 install.
 func tmuxBin() string {
