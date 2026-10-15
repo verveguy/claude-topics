@@ -206,12 +206,23 @@ func paneRunningClaude(target string) bool {
 		return false
 	}
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		c := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(l), "-"))
-		if c != "" && !shellCommands[c] {
+		if c := paneCommandName(l); c != "" && !shellCommands[c] {
 			return true
 		}
 	}
 	return false
+}
+
+// paneCommandName reduces #{pane_current_command} to a bare, lower-case program name.
+// On Windows, MSYS2's tmux reports MSYS programs bare ("bash") but a NATIVE program by
+// its full Windows path, escaped: C:\\Users\\me\\.local\\bin\\claude.exe. Seen
+// 2026-10-15 on windoze. A login shell's leading "-" goes too.
+func paneCommandName(s string) string {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "-")
+	if i := strings.LastIndexAny(s, `/\`); i >= 0 {
+		s = s[i+1:]
+	}
+	return strings.TrimSuffix(strings.ToLower(s), ".exe")
 }
 
 // claudeProcessName matches Claude Code's own process: it renames itself to its version.
@@ -226,7 +237,7 @@ func paneShowsClaude(target string) bool {
 		return false
 	}
 	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if claudeProcessName.MatchString(strings.TrimSpace(l)) {
+		if claudeProcessName.MatchString(paneCommandName(l)) {
 			return true
 		}
 	}

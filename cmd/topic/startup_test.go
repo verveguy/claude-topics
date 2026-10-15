@@ -67,6 +67,26 @@ func TestClassifyStartup(t *testing.T) {
 	}
 }
 
+func TestPaneCommandName(t *testing.T) {
+	for in, want := range map[string]string{
+		"claude":  "claude",
+		"2.1.300": "2.1.300",
+		"-zsh":    "zsh",
+		"bash":    "bash",
+		// Windows: a native program arrives as its full, escaped Windows path.
+		`C:\\Users\\bpjad\\.local\\bin\\claude.exe`: "claude",
+		`C:\Users\bpjad\.local\bin\Claude.EXE`:      "claude",
+		"/usr/bin/bash":                             "bash",
+	} {
+		if got := paneCommandName(in); got != want {
+			t.Errorf("paneCommandName(%q) = %q, want %q", in, got, want)
+		}
+		if want == "claude" && !claudeProcessName.MatchString(paneCommandName(in)) {
+			t.Errorf("%q should count as Claude", in)
+		}
+	}
+}
+
 func TestClaudeProcessName(t *testing.T) {
 	for _, n := range []string{"2.1.289", "claude"} {
 		if !claudeProcessName.MatchString(n) {
