@@ -317,3 +317,46 @@ func TestLiveRefusesUnonboardedProfile(t *testing.T) {
 		t.Error("a session was left parked at the prompt")
 	}
 }
+
+// claudeArgs (issue #7) must be on the command line of EVERY launch — channels are a
+// per-process setting, so a resume without them silently drops MCP pushes. A benign
+// flag stands in for the channel flag, which would need an MCP server configured.
+func TestLiveClaudeArgsSurviveDownAndUp(t *testing.T) {
+	e := liveEnv(t)
+	name := uniqueName(t)
+	workDir := filepath.Join(t.TempDir(), "work")
+	mkdirAll(t, workDir)
+	t.Cleanup(func() { e.tearDown(name, workDir) })
+
+	e.mustRun("up", name, workDir, "--", "--verbose")
+	if cl := claudeCmdline(t, e, name); !strings.Contains(cl, "--verbose") {
+		t.Fatalf("first launch lacks the arg: %s", cl)
+	}
+	e.mustRun("down", name)
+	e.mustRun("up", name)
+	if cl := claudeCmdline(t, e, name); !strings.Contains(cl, "--verbose") || !strings.Contains(cl, "--resume") {
+		t.Fatalf("resumed launch lacks the arg: %s", cl)
+	}
+}
+
+// claudeCmdline is the argv of the claude process under a topic's tmux pane.
+func claudeCmdline(t *testing.T, e *env, name string) string {
+	t.Helper()
+	out, err := exec.Command("tmux", "display", "-p", "-t", "="+tmuxName(e, name), "#{pane_pid}").Output()
+	if err != nil {
+		t.Fatalf("no tmux pane for %q: %v", name, err)
+	}
+	shell := strings.TrimSpace(string(out))
+	for range 20 {
+		ps, _ := exec.Command("ps", "-A", "-o", "ppid=,args=").Output()
+		for _, line := range strings.Split(string(ps), "\n") {
+			f := strings.Fields(line)
+			if len(f) > 1 && f[0] == shell && strings.Contains(line, "claude") {
+				return strings.Join(f[1:], " ")
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("no claude process under pane %s", shell)
+	return ""
+}

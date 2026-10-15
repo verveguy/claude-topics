@@ -80,6 +80,17 @@ func atoi(s string) int {
 func cmdUp(args []string) error {
 	claim, seedFrom := false, ""
 	var positional []string
+	// The profile is always appended last; everything after a "--" before it is
+	// claude's, to be stored as the topic's claudeArgs.
+	var userArgs []string
+	if len(args) >= 2 {
+		var own []string
+		own, userArgs, _ = splitClaudeArgs(args[:len(args)-2])
+		args = append(own, args[len(args)-2:]...)
+	}
+	if err := checkClaudeArgs(userArgs); err != nil {
+		return err
+	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--claim":
@@ -100,7 +111,7 @@ func cmdUp(args []string) error {
 		}
 	}
 	if len(positional) < 3 {
-		return fmt.Errorf(`usage: topic up "<name>" [dir] [--claim] [--seed-from <file>]`)
+		return fmt.Errorf(`usage: topic up "<name>" [dir] [--claim] [--seed-from <file>] [-- <claude args...>]`)
 	}
 	// name [dir] config-dir topics-root
 	name := positional[0]
@@ -164,7 +175,22 @@ func cmdUp(args []string) error {
 	if isUp(tag, name) {
 		fmt.Printf("%q is already up.\n", name)
 		fmt.Printf("  attach: tmux attach -t %q\n", tmuxName(tag, name))
+		if len(userArgs) > 0 {
+			if err := setClaudeArgs(topicsRoot, name, userArgs); err != nil {
+				return err
+			}
+			fmt.Printf("  claude args recorded (%s) — they apply from the next launch;\n", quotedArgs(userArgs))
+			fmt.Println("  the running session is unaffected.")
+		}
 		return nil
+	}
+
+	// Given args replace the stored list; otherwise the stored list is used. Recorded
+	// before the launch, so the launch reads them from the same place every relaunch will.
+	if len(userArgs) > 0 {
+		if err := setClaudeArgs(topicsRoot, name, userArgs); err != nil {
+			return err
+		}
 	}
 
 	if dir == "" {
@@ -180,7 +206,7 @@ func cmdUp(args []string) error {
 			fmt.Fprintf(os.Stderr, "note: --seed-from ignored; %q has an existing session to resume.\n", name)
 		}
 		fmt.Printf("Picking up %q (resuming session %s…) in %s\n", name, truncate(sid, 8), dir)
-		if err := launchSession(configDir, name, dir,
+		if err := launchTopic(configDir, topicsRoot, name, dir,
 			"--remote-control", name, "--name", name, "--resume", sid); err != nil {
 			return err
 		}
@@ -195,7 +221,7 @@ func cmdUp(args []string) error {
 					"the context you need. Summarise briefly what you picked up, then continue from there.",
 				name, seedFrom))
 		}
-		if err := launchSession(configDir, name, dir, launchArgs...); err != nil {
+		if err := launchTopic(configDir, topicsRoot, name, dir, launchArgs...); err != nil {
 			return err
 		}
 		fields := []string{"name", name, "generation", "1"}

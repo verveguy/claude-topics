@@ -266,6 +266,33 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
+// topicEnv carries the topic's name into every session topic launches.
+const topicEnv = "CLAUDE_TOPIC"
+
+// claudeCommand is the shell line typed into a topic's pane.
+//
+// Pin the profile onto the command itself: a detached tmux session does NOT reliably
+// inherit our environment (the tmux server may long predate us), and a session
+// launched under the wrong profile writes its transcript somewhere this tool cannot
+// see. The default profile is pinned too, by UNSETTING the variable: "default" means
+// absent, not ~/.claude, and the tmux server's own environment may carry a stale
+// CLAUDE_CONFIG_DIR from whichever profile happened to start it.
+//
+// The topic's name is exported as topicEnv, so whatever the session starts — its MCP
+// servers above all — can tell which topic it serves. Fabrik's channel subscriber name
+// must be stable across sessions, and the topic name is exactly that.
+func claudeCommand(configDir, name string, claudeArgs []string) string {
+	topic := topicEnv + "=" + shellQuote(name)
+	cmd := "env -u CLAUDE_CONFIG_DIR " + topic + " claude"
+	if profileTag(configDir) != "" {
+		cmd = "CLAUDE_CONFIG_DIR=" + shellQuote(configDir) + " " + topic + " claude"
+	}
+	for _, a := range claudeArgs {
+		cmd += " " + shellQuote(a)
+	}
+	return cmd
+}
+
 // launchSession creates a detached tmux session and sends the claude command into it.
 // send-keys rather than `tmux new -d claude`, so the shell survives claude exiting and
 // the user can relaunch in place.
@@ -280,19 +307,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		dir = abs
 	}
 
-	// Pin the profile onto the command itself: a detached tmux session does NOT
-	// reliably inherit our environment (the tmux server may long predate us), and a
-	// session launched under the wrong profile writes its transcript somewhere this
-	// tool cannot see. The default profile is pinned too, by UNSETTING the variable:
-	// "default" means absent, not ~/.claude, and the tmux server's own environment may
-	// carry a stale CLAUDE_CONFIG_DIR from whichever profile happened to start it.
-	cmd := "env -u CLAUDE_CONFIG_DIR claude"
-	if tag != "" {
-		cmd = "CLAUDE_CONFIG_DIR=" + shellQuote(configDir) + " claude"
-	}
-	for _, a := range claudeArgs {
-		cmd += " " + shellQuote(a)
-	}
+	cmd := claudeCommand(configDir, name, claudeArgs)
 
 	// We may be relaunching over the husk of a session that quit — tmux refuses to
 	// reuse the name. Kill outright rather than clearHusk: isUp said this topic was
