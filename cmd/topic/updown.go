@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -90,6 +91,11 @@ func cmdUp(args []string) error {
 			i++
 			seedFrom = args[i]
 		default:
+			// An unrecognised flag is a mistake, not a topic name: taking it as one
+			// creates a topic called "--verbose".
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown flag for up: %s (try: topic up --help)", args[i])
+			}
 			positional = append(positional, args[i])
 		}
 	}

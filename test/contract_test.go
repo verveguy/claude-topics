@@ -340,3 +340,39 @@ func TestMoveIntoAScaffoldDirectory(t *testing.T) {
 		t.Error("source registry entry survived the move")
 	}
 }
+
+// `topic <cmd> --help` explains the command; it must never run it. Claude reaches for
+// `topic up --help` to learn the CLI, and that used to create a topic named "--help".
+func TestSubcommandHelpDoesNotRun(t *testing.T) {
+	e := newEnv(t)
+	for _, args := range [][]string{
+		{"up", "--help"}, {"up", "-h"}, {"up", "Some Topic", "--help"},
+		{"down", "--help"}, {"fork", "--help"}, {"help", "up"},
+	} {
+		r := e.mustRun(args...)
+		mustContain(t, r.stdout, "topic "+strings.TrimPrefix(args[0], "help"), "help for "+strings.Join(args, " "))
+	}
+	r := e.mustRun("up", "--help")
+	mustContain(t, r.stdout, "--seed-from", "up's help should describe its flags")
+	if strings.Contains(r.stdout, "topic down-all") {
+		t.Error("up's help should be just up's entry, not the whole overview")
+	}
+	entries, _ := os.ReadDir(e.topicsRoot)
+	for _, d := range entries {
+		t.Errorf("help created registry entry %q", d.Name())
+	}
+}
+
+// An unknown flag to `up` is an error, not the name of a new topic.
+func TestUpRejectsUnknownFlag(t *testing.T) {
+	e := newEnv(t)
+	r := e.run("up", "--verbose")
+	if r.code == 0 {
+		t.Fatalf("topic up --verbose succeeded:\n%s", r.out())
+	}
+	mustContain(t, r.stderr, "unknown flag", "should name the problem")
+	entries, _ := os.ReadDir(e.topicsRoot)
+	for _, d := range entries {
+		t.Errorf("unknown flag created registry entry %q", d.Name())
+	}
+}

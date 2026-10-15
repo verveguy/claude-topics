@@ -147,9 +147,20 @@ func main() {
 	// arguments rather than reading the environment, so tests can drive them directly.
 	withProfile := func(a []string) []string { return append(a, p.configDir, p.topicsRoot) }
 
+	// `topic up --help` must explain `up`, not start a topic called "--help". Checked
+	// before dispatch so no command ever sees the flag as a name.
+	if wantsHelp(cmd, args) {
+		fmt.Print(commandHelp(cmd))
+		return
+	}
+
 	var err error
 	switch cmd {
 	case "", "-h", "--help", "help":
+		if len(args) > 0 {
+			fmt.Print(commandHelp(args[0])) // `topic help up`
+			return
+		}
 		fmt.Print(usageText)
 		return
 
@@ -230,6 +241,59 @@ func main() {
 	if err != nil {
 		fail("%v", err)
 	}
+}
+
+func isHelpFlag(a string) bool { return a == "-h" || a == "--help" }
+
+// wantsHelp reports whether a subcommand was asked for help rather than run. A help
+// flag anywhere among the arguments counts — `topic up "X" --help` too — except where
+// arguments are free text: a daemon's command line (`daemon add <name> <dir> mytool
+// --help`) and the low-level helpers, which take arbitrary values.
+func wantsHelp(cmd string, args []string) bool {
+	switch cmd {
+	case "get", "set", "sessions", "find-titled", "transcript-title", "transcript-cwd":
+		return len(args) > 0 && isHelpFlag(args[0])
+	case "daemon":
+		if len(args) > 3 {
+			args = args[:3] // verb, name, dir; the rest is the daemon's own command
+		}
+	}
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if isHelpFlag(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandHelp is the part of usageText describing one command: every entry that
+// starts "  topic <cmd>", with its continuation lines. One source of truth, so the
+// per-command help cannot drift from the overview. Commands the overview does not
+// list (the low-level helpers) get the whole thing.
+func commandHelp(cmd string) string {
+	if cmd == "ls" {
+		cmd = "list"
+	}
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(usageText, "\n") {
+		if strings.HasPrefix(line, "  topic ") {
+			rest := strings.TrimPrefix(line, "  topic ")
+			in = rest == cmd || strings.HasPrefix(rest, cmd+" ")
+		} else if !strings.HasPrefix(line, "   ") {
+			in = false // a blank line or prose ends the entry
+		}
+		if in {
+			b.WriteString(line + "\n")
+		}
+	}
+	if b.Len() == 0 {
+		return usageText
+	}
+	return "usage:\n" + b.String() + "\nRun `topic --help` for the full overview.\n"
 }
 
 func requireName(args []string, usage string) []string {
