@@ -80,8 +80,12 @@ func setClaudeArgs(topicsRoot, name string, a []string) error {
 // topic's own arguments stay last, so a positional seed prompt is still the final
 // argument claude sees. With no stored args the command line is exactly what it was.
 func launchTopic(configDir, topicsRoot, name, dir string, owned ...string) error {
-	return launchSession(configDir, name, dir, topicLaunchArgs(topicsRoot, name, owned)...)
+	return launch(configDir, name, dir, topicLaunchArgs(topicsRoot, name, owned)...)
 }
+
+// launch is launchSession, swappable so tests can stand in for a session that stops at
+// a startup prompt without needing a real claude.
+var launch = launchSession
 
 func topicLaunchArgs(topicsRoot, name string, owned []string) []string {
 	return append(topicClaudeArgs(topicsRoot, name), owned...)

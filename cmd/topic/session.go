@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -127,6 +128,33 @@ func devChannelsMatch(pane string, claudeArgs []string) bool {
 		}
 	}
 	return true
+}
+
+// leftRunningError is a launch that stopped at a prompt topic will not answer, with the
+// session still alive in tmux for the user to answer where it sits. Callers must record
+// that session before returning it: the registry is the only thing that ties the topic
+// to the session's UUID, and the session is real, resumable work.
+type leftRunningError struct{ msg string }
+
+func (e *leftRunningError) Error() string { return e.msg }
+
+func isLeftRunning(err error) bool {
+	var l *leftRunningError
+	return errors.As(err, &l)
+}
+
+// recordLaunch runs record for a launch that either succeeded or left its session
+// running at a prompt, and then returns launchErr — so a session parked on a question
+// is registered (and resumable, and findable by `topic down`) without being reported up.
+// Any other launch failure means no session survives, so there is nothing to record.
+func recordLaunch(launchErr error, record func() error) error {
+	if launchErr != nil && !isLeftRunning(launchErr) {
+		return launchErr
+	}
+	if err := record(); err != nil {
+		return err
+	}
+	return launchErr
 }
 
 func tmuxRun(args ...string) error { return exec.Command("tmux", args...).Run() }
@@ -410,10 +438,10 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 				time.Sleep(300 * time.Millisecond)
 				if err := selectMenuOption(tn, capturePane(tn), startupPatterns.devChannelsAccept); err != nil {
 					fmt.Println()
-					return fmt.Errorf("%q is waiting on the development-channels confirmation and topic\n"+
+					return &leftRunningError{fmt.Sprintf("%q is waiting on the development-channels confirmation and topic\n"+
 						"  could not answer it safely: %v.\n"+
 						"  It is still running. Answer it there and it carries on:\n    tmux attach -t %q\n"+
-						"  unanswered startup prompt", name, err, tn)
+						"  unanswered startup prompt", name, err, tn)}
 				}
 				fmt.Print(" (dev channels confirmed)")
 				devAnswered = true
@@ -455,9 +483,9 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		// reported every one of them up.
 		if state == startupPendingChoice {
 			fmt.Println()
-			return fmt.Errorf("%q is waiting on a question topic will not answer for you:\n%s\n"+
+			return &leftRunningError{fmt.Sprintf("%q is waiting on a question topic will not answer for you:\n%s\n"+
 				"  It is still running. Answer it there and it carries on:\n    tmux attach -t %q\n"+
-				"  unanswered startup prompt", name, screenTail(pane, 8), tn)
+				"  unanswered startup prompt", name, screenTail(pane, 8), tn)}
 		}
 		time.Sleep(500 * time.Millisecond)
 		fmt.Print(".")

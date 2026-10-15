@@ -221,14 +221,18 @@ func cmdUp(args []string) error {
 					"the context you need. Summarise briefly what you picked up, then continue from there.",
 				name, seedFrom))
 		}
-		if err := launchTopic(configDir, topicsRoot, name, dir, launchArgs...); err != nil {
-			return err
-		}
-		fields := []string{"name", name, "generation", "1"}
-		if seedFrom != "" {
-			fields = append(fields, "seededFrom", seedFrom)
-		}
-		if err := cmdSet(append([]string{file}, fields...)); err != nil {
+		launchErr := launchTopic(configDir, topicsRoot, name, dir, launchArgs...)
+		// A session parked at a startup question is still running and still this
+		// topic's: register it, or `topic down` cannot find it and the next `up` starts
+		// a different session, in whatever directory the shell happens to be in.
+		if err := recordLaunch(launchErr, func() error {
+			fields := []string{"name", name, "generation", "1", "dir", dir, "sessionId", sid,
+				"state", "up", "lastPickedUp", nowISO()}
+			if seedFrom != "" {
+				fields = append(fields, "seededFrom", seedFrom)
+			}
+			return cmdSet(append([]string{file}, fields...))
+		}); err != nil {
 			return err
 		}
 	}

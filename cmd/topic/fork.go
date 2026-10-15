@@ -183,24 +183,26 @@ func cmdFork(args []string) error {
 		fmt.Printf("  claude args: %s\n", quotedArgs(childArgs))
 	}
 
-	if err := launchTopic(configDir, topicsRoot, name, dir,
-		"--remote-control", name, "--name", name, "--session-id", sid, seed); err != nil {
-		return err
-	}
-
-	fields := []string{topicFile(topicsRoot, name),
-		"name", name, "dir", dir, "sessionId", sid, "state", "up",
-		"generation", "1", "seededFrom", brief, "lastPickedUp", nowISO()}
-	if parent != "" {
-		fields = append(fields, "forkedFrom", parent)
-	}
-	if err := cmdSet(fields); err != nil {
-		return err
-	}
-	if parent != "" {
-		if err := cmdPushFork([]string{topicFile(topicsRoot, parent), name}); err != nil {
+	launchErr := launchTopic(configDir, topicsRoot, name, dir,
+		"--remote-control", name, "--name", name, "--session-id", sid, seed)
+	// Registered even when the child is parked at a startup question: it is running,
+	// and an unregistered session is one `topic down` cannot find.
+	if err := recordLaunch(launchErr, func() error {
+		fields := []string{topicFile(topicsRoot, name),
+			"name", name, "dir", dir, "sessionId", sid, "state", "up",
+			"generation", "1", "seededFrom", brief, "lastPickedUp", nowISO()}
+		if parent != "" {
+			fields = append(fields, "forkedFrom", parent)
+		}
+		if err := cmdSet(fields); err != nil {
 			return err
 		}
+		if parent != "" {
+			return cmdPushFork([]string{topicFile(topicsRoot, parent), name})
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	fmt.Printf("%q is up. Remote Control name: %q\n", name, name)
@@ -310,13 +312,15 @@ func cmdHandoffSwap(args []string) error {
 			"do not treat them as finished either.", focus)
 	}
 
-	if err := launchTopic(configDir, topicsRoot, name, dir,
-		"--remote-control", name, "--name", name, "--session-id", newSID, seed); err != nil {
-		return err
-	}
-	if err := cmdSet([]string{file, "name", name, "dir", dir, "sessionId", newSID,
-		"state", "up", "generation", strconv.Itoa(gen + 1),
-		"lastPickedUp", nowISO(), "lastHandoff", doc}); err != nil {
+	launchErr := launchTopic(configDir, topicsRoot, name, dir,
+		"--remote-control", name, "--name", name, "--session-id", newSID, seed)
+	// The old session is already stopped and archived, so a replacement parked at a
+	// startup question must be recorded or the registry names a session that is gone.
+	if err := recordLaunch(launchErr, func() error {
+		return cmdSet([]string{file, "name", name, "dir", dir, "sessionId", newSID,
+			"state", "up", "generation", strconv.Itoa(gen + 1),
+			"lastPickedUp", nowISO(), "lastHandoff", doc})
+	}); err != nil {
 		return err
 	}
 	fmt.Printf("%q is up on a fresh session (%s…). Old session archived in history.\n",
