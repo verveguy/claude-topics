@@ -365,8 +365,10 @@ cd $HOME\dev\claude-topics; .\install.ps1 -DispatcherName "Dispatcher (<this mac
 
 `install.ps1` copies `topic.exe` to `~\.local\bin` (re-run it after changing `cmd\`),
 junctions the plugin into place, and registers a Task Scheduler task,
-`\claude-topics\claude-dispatcher`, that runs `topic ensure-dispatcher` at logon and every
-five minutes — so the Dispatcher comes back after a reboot. Topics run in MSYS2's tmux with
+`\claude-topics\claude-dispatcher` (`claude-dispatcher-<tag>` for a non-default profile),
+that runs `topic ensure-dispatcher` at logon and every five minutes — so the Dispatcher
+comes back once you log in after a reboot. Not before: the task runs as you, at logon, so
+an unattended machine sitting at the login screen starts nothing. Topics run in MSYS2's tmux with
 a bash pane; attach with `tmux attach -t "<name>"` from an MSYS2 shell. Give each machine's
 Dispatcher its own name: they all advertise it to Remote Control.
 
