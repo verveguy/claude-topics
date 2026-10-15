@@ -175,7 +175,9 @@ func cmdUp(args []string) error {
 	if isUp(tag, name) {
 		fmt.Printf("%q is already up.\n", name)
 		fmt.Printf("  attach: tmux attach -t %q\n", tmuxName(tag, name))
-		if len(userArgs) > 0 {
+		// Only for a topic with a registry entry: writing one here would create an entry
+		// holding nothing but claudeArgs.
+		if len(userArgs) > 0 && fileExists(file) {
 			if err := setClaudeArgs(topicsRoot, name, userArgs); err != nil {
 				return err
 			}
@@ -185,12 +187,17 @@ func cmdUp(args []string) error {
 		return nil
 	}
 
-	// Given args replace the stored list; otherwise the stored list is used. Recorded
-	// before the launch, so the launch reads them from the same place every relaunch will.
-	if len(userArgs) > 0 {
-		if err := setClaudeArgs(topicsRoot, name, userArgs); err != nil {
-			return err
+	// Given args replace the stored list; otherwise the stored list is used. They are
+	// stored only once the launch has produced a session (see recordLaunch below).
+	extra := userArgs
+	if len(extra) == 0 {
+		extra = topicClaudeArgs(topicsRoot, name)
+	}
+	storeArgs := func() error {
+		if len(userArgs) == 0 {
+			return nil
 		}
+		return setClaudeArgs(topicsRoot, name, userArgs)
 	}
 
 	if dir == "" {
@@ -206,8 +213,8 @@ func cmdUp(args []string) error {
 			fmt.Fprintf(os.Stderr, "note: --seed-from ignored; %q has an existing session to resume.\n", name)
 		}
 		fmt.Printf("Picking up %q (resuming session %s…) in %s\n", name, truncate(sid, 8), dir)
-		if err := launchTopic(configDir, topicsRoot, name, dir,
-			"--remote-control", name, "--name", name, "--resume", sid); err != nil {
+		if err := recordLaunch(launchTopicWith(configDir, name, dir, extra,
+			"--remote-control", name, "--name", name, "--resume", sid), storeArgs); err != nil {
 			return err
 		}
 	} else {
@@ -221,7 +228,7 @@ func cmdUp(args []string) error {
 					"the context you need. Summarise briefly what you picked up, then continue from there.",
 				name, seedFrom))
 		}
-		launchErr := launchTopic(configDir, topicsRoot, name, dir, launchArgs...)
+		launchErr := launchTopicWith(configDir, name, dir, extra, launchArgs...)
 		// A session parked at a startup question is still running and still this
 		// topic's: register it, or `topic down` cannot find it and the next `up` starts
 		// a different session, in whatever directory the shell happens to be in.
@@ -231,7 +238,10 @@ func cmdUp(args []string) error {
 			if seedFrom != "" {
 				fields = append(fields, "seededFrom", seedFrom)
 			}
-			return cmdSet(append([]string{file}, fields...))
+			if err := cmdSet(append([]string{file}, fields...)); err != nil {
+				return err
+			}
+			return storeArgs()
 		}); err != nil {
 			return err
 		}

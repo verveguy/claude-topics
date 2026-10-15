@@ -345,18 +345,26 @@ func TestMoveIntoAScaffoldDirectory(t *testing.T) {
 // `topic up --help` to learn the CLI, and that used to create a topic named "--help".
 func TestSubcommandHelpDoesNotRun(t *testing.T) {
 	e := newEnv(t)
-	for _, args := range [][]string{
-		{"up", "--help"}, {"up", "-h"}, {"up", "Some Topic", "--help"},
-		{"down", "--help"}, {"fork", "--help"}, {"help", "up"},
+	for _, c := range []struct {
+		args []string
+		cmd  string
+	}{
+		{[]string{"up", "--help"}, "up"}, {[]string{"up", "-h"}, "up"},
+		{[]string{"up", "Some Topic", "--help"}, "up"},
+		{[]string{"down", "--help"}, "down"}, {[]string{"fork", "--help"}, "fork"},
+		{[]string{"help", "up"}, "up"},
 	} {
-		r := e.mustRun(args...)
-		mustContain(t, r.stdout, "topic "+strings.TrimPrefix(args[0], "help"), "help for "+strings.Join(args, " "))
+		r := e.mustRun(c.args...)
+		// The command's own entry, and only it: the full overview also contains
+		// "topic <anything>", so asserting on the name alone would pass even if the
+		// argument were ignored and everything printed.
+		mustContain(t, r.stdout, "  topic "+c.cmd+" ", "help for "+strings.Join(c.args, " "))
+		if strings.Contains(r.stdout, "topic down-all") && c.cmd != "down" {
+			t.Errorf("%v printed the whole overview, not just %s's entry", c.args, c.cmd)
+		}
 	}
 	r := e.mustRun("up", "--help")
 	mustContain(t, r.stdout, "--seed-from", "up's help should describe its flags")
-	if strings.Contains(r.stdout, "topic down-all") {
-		t.Error("up's help should be just up's entry, not the whole overview")
-	}
 	entries, _ := os.ReadDir(e.topicsRoot)
 	for _, d := range entries {
 		t.Errorf("help created registry entry %q", d.Name())

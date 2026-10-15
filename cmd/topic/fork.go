@@ -177,13 +177,10 @@ func cmdFork(args []string) error {
 		childArgs = topicClaudeArgs(topicsRoot, parent)
 	}
 	if len(childArgs) > 0 {
-		if err := setClaudeArgs(topicsRoot, name, childArgs); err != nil {
-			return err
-		}
 		fmt.Printf("  claude args: %s\n", quotedArgs(childArgs))
 	}
 
-	launchErr := launchTopic(configDir, topicsRoot, name, dir,
+	launchErr := launchTopicWith(configDir, name, dir, childArgs,
 		"--remote-control", name, "--name", name, "--session-id", sid, seed)
 	// Registered even when the child is parked at a startup question: it is running,
 	// and an unregistered session is one `topic down` cannot find.
@@ -196,6 +193,13 @@ func cmdFork(args []string) error {
 		}
 		if err := cmdSet(fields); err != nil {
 			return err
+		}
+		// Stored with the session, not before it: a failed launch must not leave an
+		// entry holding nothing but claudeArgs.
+		if len(childArgs) > 0 {
+			if err := setClaudeArgs(topicsRoot, name, childArgs); err != nil {
+				return err
+			}
 		}
 		if parent != "" {
 			return cmdPushFork([]string{topicFile(topicsRoot, parent), name})

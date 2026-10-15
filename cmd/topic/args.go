@@ -80,7 +80,14 @@ func setClaudeArgs(topicsRoot, name string, a []string) error {
 // topic's own arguments stay last, so a positional seed prompt is still the final
 // argument claude sees. With no stored args the command line is exactly what it was.
 func launchTopic(configDir, topicsRoot, name, dir string, owned ...string) error {
-	return launch(configDir, name, dir, topicLaunchArgs(topicsRoot, name, owned)...)
+	return launchTopicWith(configDir, name, dir, topicClaudeArgs(topicsRoot, name), owned...)
+}
+
+// launchTopicWith launches with an explicit extra-args list. up and fork use it when
+// the list is not yet in the registry: they store it only AFTER the launch, so a launch
+// that fails leaves no registry entry holding nothing but claudeArgs.
+func launchTopicWith(configDir, name, dir string, extra []string, owned ...string) error {
+	return launch(configDir, name, dir, append(append([]string{}, extra...), owned...)...)
 }
 
 // launch is launchSession, swappable so tests can stand in for a session that stops at
