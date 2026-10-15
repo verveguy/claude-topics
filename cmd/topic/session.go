@@ -18,7 +18,8 @@ import (
 // look when a launch misbehaves — suspect this first.
 
 var startupPatterns = struct {
-	trust, trustAccept, ready, onboarding, externalImports, pendingChoice, noConversation *regexp.Regexp
+	trust, trustAccept, devChannels, devChannelsAccept, devChannelsList,
+	ready, onboarding, externalImports, pendingChoice, noConversation *regexp.Regexp
 }{
 	// Auto-accepted: the workspace trust prompt.
 	trust: regexp.MustCompile(`trust this folder`),
@@ -27,6 +28,14 @@ var startupPatterns = struct {
 	// sterner variant of the dialog whose pre-selected option is "No, exit". Pressing
 	// Enter blind — which this code used to do — then declines and quits.
 	trustAccept: regexp.MustCompile(`(?i)Yes, I trust|Yes, proceed`),
+	// The confirmation --dangerously-load-development-channels raises on EVERY launch
+	// (Claude Code v2.1.300). Answered only for a topic whose stored claudeArgs carry
+	// that flag, and only when the channels it lists are exactly the stored ones: the
+	// flag is the user's standing answer, and relaunching unattended (handoff, move,
+	// the Dispatcher) is the point of storing it. Declining quits Claude.
+	devChannels:       regexp.MustCompile(`dangerously-load-development-channels is for local\s+channel development`),
+	devChannelsAccept: regexp.MustCompile(`I am using this for local development`),
+	devChannelsList:   regexp.MustCompile(`Channels:\s*(.+)`),
 	// The session is usable.
 	ready: regexp.MustCompile(`(?i)Welcome back|remote-control is active`),
 	// First-run setup — a theme and an account are the user's choices, not ours.
@@ -46,6 +55,7 @@ type startupState int
 const (
 	startupWaiting startupState = iota
 	startupTrust
+	startupDevChannels
 	startupExternalImports
 	startupOnboarding
 	startupReady
@@ -68,6 +78,8 @@ func classifyStartup(pane string, trusted bool) startupState {
 		return startupTrust
 	case p.externalImports.MatchString(pane):
 		return startupExternalImports
+	case p.devChannels.MatchString(pane):
+		return startupDevChannels
 	case p.ready.MatchString(pane):
 		return startupReady
 	case p.onboarding.MatchString(pane):
@@ -90,6 +102,31 @@ func screenTail(pane string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// devChannelsMatch reports whether the development-channels confirmation on screen
+// lists exactly the channel sources this launch asked for, so topic only ever confirms
+// what the user stored — never a source that arrived some other way.
+func devChannelsMatch(pane string, claudeArgs []string) bool {
+	want := channelSources(claudeArgs)
+	m := startupPatterns.devChannelsList.FindStringSubmatch(pane)
+	if len(want) == 0 || m == nil {
+		return false
+	}
+	shown := strings.FieldsFunc(m[1], func(r rune) bool { return r == ',' || r == ' ' })
+	if len(shown) != len(want) {
+		return false
+	}
+	for _, s := range shown {
+		found := false
+		for _, w := range want {
+			found = found || s == w
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func tmuxRun(args ...string) error { return exec.Command("tmux", args...).Run() }
@@ -328,10 +365,14 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 	if tag != "" {
 		hint = "(cd " + dir + " && CLAUDE_CONFIG_DIR=" + configDir + " claude)"
 	}
-	sawClaude := false
+	sawClaude, devAnswered := false, false
 	for range 40 {
 		pane := capturePane(tn)
 		state := classifyStartup(pane, trusted)
+		// Like the trust dialog, an answered confirmation can linger for a moment.
+		if state == startupDevChannels && devAnswered {
+			state = startupWaiting
+		}
 
 		// Claude exiting during start-up leaves only the shell, which used to be reported
 		// as up once the poll ran out. "Seen running" first, because a fresh shell can
@@ -361,6 +402,23 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 			fmt.Print(" (trust accepted)")
 			trusted = true
 			continue
+		}
+		if state == startupDevChannels {
+			if !devChannelsMatch(pane, claudeArgs) {
+				state = startupPendingChoice // not ours to answer: report it like any question
+			} else {
+				time.Sleep(300 * time.Millisecond)
+				if err := selectMenuOption(tn, capturePane(tn), startupPatterns.devChannelsAccept); err != nil {
+					fmt.Println()
+					return fmt.Errorf("%q is waiting on the development-channels confirmation and topic\n"+
+						"  could not answer it safely: %v.\n"+
+						"  It is still running. Answer it there and it carries on:\n    tmux attach -t %q\n"+
+						"  unanswered startup prompt", name, err, tn)
+				}
+				fmt.Print(" (dev channels confirmed)")
+				devAnswered = true
+				continue
+			}
 		}
 		if state == startupExternalImports {
 			killSession(tn)

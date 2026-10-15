@@ -97,6 +97,13 @@ topic set-args "Fabrik work" --clear        # remove it
 - `move` carries them and warns that any channel source they name must also be
   configured in the destination profile.
 - A running session is unaffected by `set-args`; `down` then `up` applies the change.
+- `--dangerously-load-development-channels` makes Claude Code show a confirmation
+  ("I am using this for local development / Exit") on **every** launch, and there is no
+  setting that pre-answers it. Since storing the flag is your standing answer, `topic`
+  presses the first option itself — but only when the topic's stored `claudeArgs`
+  contain that flag **and** the channels listed on screen are exactly the stored ones.
+  Any other screen is left for you, as before. `--channels` needs no confirmation but
+  accepts only plugins on Anthropic's allowlist, which only an org admin can extend.
 - A topic with no `claudeArgs` launches with the command line it always had.
 
 Every launch also exports **`CLAUDE_TOPIC=<name>`**, with or without `claudeArgs`, so
