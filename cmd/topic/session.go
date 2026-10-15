@@ -221,7 +221,7 @@ var claudeProcessName = regexp.MustCompile(`^(claude|\d+\.\d+\.\d+)$`)
 // anything that is merely not a shell — a fresh shell runs other commands (`gh auth
 // token`, version managers) while it loads its rc files.
 func paneShowsClaude(target string) bool {
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
@@ -529,7 +529,7 @@ func stopSession(configDir, name string) {
 // the registry has never heard of.
 func liveSessionID(configDir, name string) string {
 	tn := tmuxName(profileTag(configDir), name)
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return ""
 	}
@@ -545,17 +545,6 @@ func liveSessionID(configDir, name string) string {
 		}
 	}
 	return sessionIDOfPids(configDir, append(kids, shells...))
-}
-
-func childPids(pid int) []int {
-	out, _ := exec.Command("pgrep", "-P", strconv.Itoa(pid)).Output()
-	var kids []int
-	for _, f := range strings.Fields(string(out)) {
-		if k := atoi(f); k > 0 {
-			kids = append(kids, k)
-		}
-	}
-	return kids
 }
 
 // sessionIDOfPids returns the session id recorded for the first of pids that is alive

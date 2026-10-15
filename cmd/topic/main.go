@@ -98,10 +98,10 @@ func withFileLock(path string, fn func() error) error {
 		return fn() // a registry we cannot lock is still better written than not
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFile(f); err != nil {
 		return fn()
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer unlockFile(f)
 	return fn()
 }
 

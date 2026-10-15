@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -350,7 +352,12 @@ func TestLiveClaudeArgsSurviveDownAndUp(t *testing.T) {
 // claudeCmdline is the argv of the claude process under a topic's tmux pane.
 func claudeCmdline(t *testing.T, e *env, name string) string {
 	t.Helper()
-	out, err := exec.Command("tmux", "display", "-p", "-t", "="+tmuxName(e, name)+":", "#{pane_pid}").Output()
+	if runtime.GOOS == "windows" {
+		// No ps there, and #{pane_pid} is an MSYS pid besides: the stored args are
+		// checked by the unit tests on that platform, not by reading the process.
+		t.Skip("reading the claude command line is not implemented on Windows")
+	}
+	out, err := tmuxCommand("display", "-p", "-t", "="+tmuxName(e, name)+":", "#{pane_pid}").Output()
 	if err != nil {
 		t.Fatalf("no tmux pane for %q: %v", name, err)
 	}

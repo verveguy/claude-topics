@@ -134,24 +134,37 @@ New-Item -ItemType Directory -Force (Split-Path $RenderedXml) | Out-Null
 # all, silently. So the command line is built without quotes — `set X=a b&& ...` is
 # still exact, provided nothing precedes && — and paths containing spaces are refused
 # rather than quoted into a task that would do nothing.
+#
+# Every value spliced into that unquoted line passes one check, so none of them can end
+# the `set` early and run something else — a task Task Scheduler reruns every five minutes
+# and at every logon. Refused: cmd.exe's metacharacters & | < > ^ " % and line breaks.
+# Parentheses are allowed on purpose: topic's own default name is "Dispatcher (<tag>)",
+# and cmd.exe treats ( ) as syntax only inside an if/for block or at the start of a
+# command, neither of which occurs here. Paths are additionally refused if they contain
+# whitespace, since they are also the command and the redirect target.
 $topicExe = Join-Path $Bin 'topic.exe'
+$cmdUnsafe = '[&|<>^"%\r\n]'
 foreach ($p in @($topicExe, $LogPath) + @(if (-not $IsDefault) { $ClaudeDir })) {
-    if ($p -match '\s') { throw "path contains a space, which the headless Dispatcher task cannot quote: $p" }
+    if ($p -match '\s') { throw "path contains whitespace, which the headless Dispatcher task cannot quote: $p" }
+    if ($p -match $cmdUnsafe) { throw "path contains a character cmd.exe would interpret (& | < > ^ `" %): $p" }
 }
-if ($DispatcherName -match '[&|<>^"%]') { throw "Dispatcher name may not contain & | < > ^ `" or %: $DispatcherName" }
+if ($DispatcherName -match $cmdUnsafe) { throw "Dispatcher name may not contain & | < > ^ `" %, or a line break: $DispatcherName" }
 $sets = ''
 if (-not $IsDefault) { $sets += "set CLAUDE_CONFIG_DIR=$ClaudeDir&& " }
 if ($DispatcherName) { $sets += "set CLAUDE_DISPATCHER_NAME=$DispatcherName&& " }
 $arguments = "--headless cmd.exe /d /c $sets$topicExe ensure-dispatcher >> $LogPath 2>&1"
 
-$esc = { param($s) [Security.SecurityElement]::Escape($s) }
+# Each value is XML-escaped, then has its $ doubled: -replace reads $ in the replacement
+# as a backreference, so an account name ending in $ (a machine account) or a $ in a path
+# would otherwise corrupt the rendered XML without a word.
+$sub = { param($s) [Security.SecurityElement]::Escape($s) -replace '\$', '$$$$' }
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $xml = (Get-Content -Raw (Join-Path $Repo 'windows\claude-dispatcher.xml.template')) `
-    -replace '__USER__', (& $esc $user) `
-    -replace '__CONFIG_DIR__', (& $esc $ClaudeDir) `
-    -replace '__COMMAND__', (& $esc 'C:\Windows\System32\conhost.exe') `
-    -replace '__ARGUMENTS__', ((& $esc $arguments) -replace '\$', '$$$$') `
-    -replace '__HOME__', (& $esc $HomeDir)
+    -replace '__USER__', (& $sub $user) `
+    -replace '__CONFIG_DIR__', (& $sub $ClaudeDir) `
+    -replace '__COMMAND__', (& $sub 'C:\Windows\System32\conhost.exe') `
+    -replace '__ARGUMENTS__', (& $sub $arguments) `
+    -replace '__HOME__', (& $sub $HomeDir)
 [IO.File]::WriteAllText($RenderedXml, $xml, (New-Object Text.UTF8Encoding $false))
 Say "rendered $RenderedXml"
 

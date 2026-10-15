@@ -9,6 +9,7 @@ package main
 // or not, so isUp could not tell a live topic from a husk. Hence tmuxShell.
 
 import (
+	"fmt"
 	"html"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"unsafe"
 )
 
 const exeSuffix = ".exe"
@@ -61,6 +63,85 @@ func startDetached(cmd *exec.Cmd) error {
 	return retry.Start()
 }
 
+var (
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx   = kernel32.NewProc("LockFileEx")
+	procUnlockFileEx = kernel32.NewProc("UnlockFileEx")
+)
+
+const lockfileExclusiveLock = 0x2
+
+// lockFile takes an exclusive lock on f's first byte, blocking until it is free. There
+// is no flock on Windows; LockFileEx is the equivalent, and is released when the handle
+// closes even if unlockFile is never reached.
+func lockFile(f *os.File) error {
+	var ol syscall.Overlapped
+	r, _, err := procLockFileEx.Call(f.Fd(), lockfileExclusiveLock, 0, 1, 0, uintptr(unsafe.Pointer(&ol)))
+	if r == 0 {
+		return err
+	}
+	return nil
+}
+
+func unlockFile(f *os.File) {
+	var ol syscall.Overlapped
+	_, _, _ = procUnlockFileEx.Call(f.Fd(), 0, 1, 0, uintptr(unsafe.Pointer(&ol)))
+}
+
+// childPids lists the WINDOWS pids running under a pane whose tmux-reported pid is pid.
+//
+// Two things differ from Unix. tmux here is an MSYS2 program, so #{pane_pid} is an MSYS
+// pid, while Claude Code keys its session records by Windows pid: translate through
+// /proc/<pid>/winpid first. And MSYS starts a native program from a forked stub of the
+// shell, so the program is a grandchild, not a child: return every descendant.
+func childPids(pid int) []int {
+	root := msysWinPid(pid)
+	if root == 0 {
+		root = pid // not an MSYS pid after all: take it as a Windows one
+	}
+	snap, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer syscall.CloseHandle(snap)
+	children := map[uint32][]uint32{}
+	var e syscall.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err = syscall.Process32First(snap, &e); err == nil; err = syscall.Process32Next(snap, &e) {
+		children[e.ParentProcessID] = append(children[e.ParentProcessID], e.ProcessID)
+	}
+	var out []int
+	queue := []uint32{uint32(root)}
+	seen := map[uint32]bool{uint32(root): true}
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		for _, c := range children[p] {
+			if !seen[c] { // pid reuse can make the parent map cyclic
+				seen[c] = true
+				out = append(out, int(c))
+				queue = append(queue, c)
+			}
+		}
+	}
+	return out
+}
+
+// msysWinPid maps an MSYS2 pid to its Windows pid, or 0 if it cannot. Only an MSYS
+// program can read MSYS's /proc, so this asks MSYS's own cat.
+func msysWinPid(pid int) int {
+	cat := filepath.Join(filepath.Dir(tmuxBin()), "cat.exe")
+	cmd := msysCmd(cat, fmt.Sprintf("/proc/%d/winpid", pid))
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	return atoi(strings.TrimSpace(string(out)))
+}
+
+// defaultShell is the daemon shell when $SHELL is unset: MSYS2's bash, as in tmuxShell.
+const defaultShell = "/usr/bin/bash"
+
 // tmuxBin finds MSYS2's tmux: TOPIC_TMUX, then PATH, then the default MSYS2 install.
 func tmuxBin() string {
 	if p := os.Getenv("TOPIC_TMUX"); p != "" {
@@ -81,8 +162,11 @@ func tmuxBin() string {
 // `-F #{pane_current_command}` reached tmux as "#pane_current_command" — never a shell
 // name, so every husk read as a running Claude. Panes inherit it too, which fixes the
 // same mangling when claude.exe itself asks tmux for its session name.
-func tmuxCmd(args ...string) *exec.Cmd {
-	cmd := exec.Command(tmuxBin(), args...)
+func tmuxCmd(args ...string) *exec.Cmd { return msysCmd(tmuxBin(), args...) }
+
+// msysCmd runs an MSYS2 program with the environment tmuxCmd describes.
+func msysCmd(prog string, args ...string) *exec.Cmd {
+	cmd := exec.Command(prog, args...)
 	msys := "noglob"
 	if cur := os.Getenv("MSYS"); cur != "" && !strings.Contains(cur, "noglob") {
 		msys = cur + " noglob"

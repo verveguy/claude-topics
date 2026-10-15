@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -115,7 +114,7 @@ func daemonState(name string) string {
 // paneShellHasChildren reports whether any pane's shell process has a child: something is
 // running under it even though the shell is what tmux reports in the foreground.
 func paneShellHasChildren(name string) bool {
-	out, err := exec.Command("tmux", "list-panes", "-t", "="+name, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+name, "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return false
 	}
@@ -155,7 +154,7 @@ func userShell() string {
 	if s := os.Getenv("SHELL"); s != "" {
 		return s
 	}
-	return "/bin/zsh"
+	return defaultShell
 }
 
 // startDaemon starts a daemon in its session.
@@ -169,7 +168,9 @@ func startDaemon(d daemonSpec, create bool) error {
 	if create {
 		sh := userShell()
 		prog := fmt.Sprintf("%s -lic %s; exec %s -l", sh, shellQuote(startLine(d)), sh)
-		if err := tmuxRun("new-session", "-d", "-s", d.Name, "-c", d.Dir, prog); err != nil {
+		// tmuxStartSession, not tmuxRun: the keeper runs from the Dispatcher's agent, so this
+		// may be what starts the tmux server, which on Windows must not stay in the agent's job.
+		if err := tmuxStartSession("new-session", "-d", "-s", d.Name, "-c", tmuxDir(d.Dir), prog); err != nil {
 			return fmt.Errorf("creating tmux session %q: %w", d.Name, err)
 		}
 		return nil

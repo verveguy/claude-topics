@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -29,6 +31,27 @@ func startDetached(cmd *exec.Cmd) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	return cmd.Start()
 }
+
+// lockFile takes an exclusive advisory lock on f, blocking until it is free.
+func lockFile(f *os.File) error { return syscall.Flock(int(f.Fd()), syscall.LOCK_EX) }
+
+func unlockFile(f *os.File) { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }
+
+// childPids lists pid's direct children. A pane's shell starts its program directly,
+// so one level is enough here.
+func childPids(pid int) []int {
+	out, _ := exec.Command("pgrep", "-P", strconv.Itoa(pid)).Output()
+	var kids []int
+	for _, f := range strings.Fields(string(out)) {
+		if k := atoi(f); k > 0 {
+			kids = append(kids, k)
+		}
+	}
+	return kids
+}
+
+// defaultShell is the daemon shell when $SHELL is unset.
+const defaultShell = "/bin/zsh"
 
 func tmuxCmd(args ...string) *exec.Cmd { return exec.Command("tmux", args...) }
 
