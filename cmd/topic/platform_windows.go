@@ -158,24 +158,48 @@ func tmuxBin() string {
 // tmuxCmd runs tmux with the MSYS2 environment its panes need. The first client starts
 // the server, and every pane inherits the server's environment, so this is what puts
 // the Windows PATH (and with it claude.exe) inside each pane.
-//
-// MSYS=noglob is load-bearing. The MSYS2 runtime glob- and brace-expands the command
-// line of any MSYS program started from a NATIVE process, so from topic.exe
-// `-F #{pane_current_command}` reached tmux as "#pane_current_command" — never a shell
-// name, so every husk read as a running Claude. Panes inherit it too, which fixes the
-// same mangling when claude.exe itself asks tmux for its session name.
 func tmuxCmd(args ...string) *exec.Cmd { return msysCmd(tmuxBin(), args...) }
 
-// msysCmd runs an MSYS2 program with the environment tmuxCmd describes.
+// msysCmd runs an MSYS2 program from this NATIVE process, with its command line built by
+// hand. The MSYS2 runtime parses a native caller's command line by its own rules, not
+// Windows': inside double quotes a backslash escapes the next character, and unquoted
+// text is glob- and brace-expanded. Go's quoting follows Windows' rules, so a seed prompt
+// quoting a topic name — `the topic "A b"` — reached tmux as `\Ab\`, and a daemon's
+// start line split apart. Measured on windoze, 2026-10-15: quoting EVERY argument as
+// "..." with \ and " backslash-escaped reaches the program exactly, #{...} included.
+//
+// That quoting also stops the brace expansion that once turned #{pane_current_command}
+// into "#pane_current_command" (every husk then read as a running Claude), which is
+// what MSYS=noglob was for. noglob must NOT be set on these calls: it also turns off
+// the backslash unescaping, mangling every quote. Panes still get it — see
+// tmuxStartSession — because claude.exe's own tmux calls are quoted the Windows way.
 func msysCmd(prog string, args ...string) *exec.Cmd {
 	cmd := exec.Command(prog, args...)
-	msys := "noglob"
-	if cur := os.Getenv("MSYS"); cur != "" && !strings.Contains(cur, "noglob") {
-		msys = cur + " noglob"
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: msysCmdLine(prog, args)}
+	var msys []string
+	for _, f := range strings.Fields(os.Getenv("MSYS")) {
+		if f != "noglob" {
+			msys = append(msys, f)
+		}
 	}
-	cmd.Env = append(os.Environ(), "MSYSTEM=MSYS", "MSYS2_PATH_TYPE=inherit", "CHERE_INVOKING=1", "MSYS="+msys)
+	cmd.Env = append(os.Environ(), "MSYSTEM=MSYS", "MSYS2_PATH_TYPE=inherit", "CHERE_INVOKING=1",
+		"MSYS="+strings.Join(msys, " "))
 	return cmd
 }
+
+var msysEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
+func msysCmdLine(prog string, args []string) string {
+	q := make([]string, 0, len(args)+1)
+	for _, a := range append([]string{prog}, args...) {
+		q = append(q, `"`+msysEscaper.Replace(a)+`"`)
+	}
+	return strings.Join(q, " ")
+}
+
+// paneEnv is set in every pane topic creates. claude.exe asks tmux for its session name
+// with an unquoted #{...} format; without noglob, MSYS brace-expands it.
+var paneEnv = []string{"-e", "MSYS=noglob"}
 
 // tmuxStartSession runs a new-session, which may start the tmux server, so the server
 // must not belong to whatever launched topic. Under Task Scheduler the Dispatcher task
@@ -184,6 +208,9 @@ func msysCmd(prog string, args ...string) *exec.Cmd {
 // from the job and detaching from the console fixes both; as in startDetached, a job
 // that forbids breakaway gets the detached start alone.
 func tmuxStartSession(args ...string) error {
+	if len(args) > 0 && args[0] == "new-session" {
+		args = append(append([]string{args[0]}, paneEnv...), args[1:]...)
+	}
 	flags := []uint32{
 		detachedProcess | createNewProcessGroup | createBreakawayFromJob,
 		detachedProcess | createNewProcessGroup,
@@ -191,7 +218,7 @@ func tmuxStartSession(args ...string) error {
 	var err error
 	for _, f := range flags {
 		cmd := tmuxCmd(args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: f}
+		cmd.SysProcAttr.CreationFlags = f // keep the hand-built command line
 		if err = cmd.Start(); err != nil {
 			continue // could not even start (e.g. breakaway refused): try the next flags
 		}
