@@ -26,7 +26,16 @@ topic list                        # what is up, what is down
 topic up   "<name>" [dir]         # pick up: resume the session, or start one
 topic down "<name>"               # put down: terminate, but stay resumable
 topic status "<name>"             # dir, session UUID, generation, history
+topic set-args "<name>" -- <claude args...>   # extra claude args on EVERY launch (--clear removes)
 ```
+
+Run `topic <verb> --help` to learn a verb: it prints help and never acts.
+
+Extra `claude` args are for per-process settings — chiefly MCP channel pushes (Fabrik):
+`topic up "<name>" <dir> -- --dangerously-load-development-channels server:fabrik`
+stores them, and up, handoff, fork, move and rename all reuse them. A running session
+is unaffected by `set-args`; down then up applies it. Every session also gets
+`CLAUDE_TOPIC=<name>` in its environment.
 
 `up` after `down` is **lossless** — it resumes the stored session UUID, so the topic
 remembers everything. Put down freely; it is not a destructive act.

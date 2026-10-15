@@ -238,6 +238,10 @@ func cmdMove(args []string) error {
 		}
 	}
 	fmt.Printf("  registry: %s -> %s\n", srcDir, dstDir)
+	if ca := topicClaudeArgs(topicsRoot, name); len(ca) > 0 {
+		fmt.Printf("  claude args: carried (%s)\n", quotedArgs(ca))
+		warnChannelSources(ca, dst)
+	}
 
 	// Work out every destination before touching anything, so a dry run shows the
 	// whole picture and a real run does not stop half-done.

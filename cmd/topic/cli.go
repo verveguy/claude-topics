@@ -21,12 +21,20 @@ what makes hand-off possible.
 
   topic up   "<name>" [dir]   Pick up: resume the topic's session, or start one.
                               --seed-from <file> starts a NEW topic from a brief.
+                              -- <claude args...> records extra claude arguments
+                              that every launch of this topic adds (see set-args).
   topic down "<name>"         Put down: terminate the session, stay resumable.
   topic down-all              Put every live topic in this profile down. Skips the
                               calling session unless --include-self. --dry-run.
   topic list [--all]          Show every topic and whether it is up or down.
                               --all crosses every profile on the machine.
   topic status "<name>"       Detail for one topic.
+  topic set-args "<name>" -- <claude args...>  |  --clear
+                              Replace (or clear) the extra claude arguments every
+                              launch of this topic adds — up, handoff, fork, move,
+                              rename. For per-process flags such as MCP channel
+                              pushes (Fabrik): -- --dangerously-load-development-
+                              channels server:fabrik. Applies from the next launch.
   topic forget "<name>"       Stop tracking a topic (keeps handoff docs; --purge
                               removes them). The session itself is untouched.
   topic prune                 Show topics that are truly dead — down, with no
@@ -46,6 +54,8 @@ what makes hand-off possible.
   topic fork "<new>" [dir]    Split a thread into its own topic, seeded with that
                               brief. --from "<parent>" defaults to the calling
                               topic; the directory defaults to the parent's.
+                              Inherits the parent's claude args unless
+                              --no-inherit-args, or -- <claude args...> replaces them.
   topic whoami                Name the topic the caller is sitting in.
 
   topic profiles              Every Claude Code profile, and its topic count.
@@ -93,6 +103,9 @@ Both are required and they do different jobs:
                     ListAgents (without it a local session advertises itself
                     as an auto-derived "<dir>-<hash>" and is unaddressable
                     by topic name — verified 2026-08-08)
+
+Every session also gets CLAUDE_TOPIC=<name> in its environment, so the MCP servers
+it starts can tell which topic they serve (e.g. a stable channel subscriber name).
 
 Singleton: at most one live session per topic, enforced by an exact-match tmux
 check plus an atomic lock. Starting a topic that is already up is a no-op.
@@ -147,9 +160,20 @@ func main() {
 	// arguments rather than reading the environment, so tests can drive them directly.
 	withProfile := func(a []string) []string { return append(a, p.configDir, p.topicsRoot) }
 
+	// `topic up --help` must explain `up`, not start a topic called "--help". Checked
+	// before dispatch so no command ever sees the flag as a name.
+	if wantsHelp(cmd, args) {
+		fmt.Print(commandHelp(cmd))
+		return
+	}
+
 	var err error
 	switch cmd {
 	case "", "-h", "--help", "help":
+		if len(args) > 0 {
+			fmt.Print(commandHelp(args[0])) // `topic help up`
+			return
+		}
 		fmt.Print(usageText)
 		return
 
@@ -163,6 +187,8 @@ func main() {
 		err = cmdDownAll(withProfile(args))
 	case "list", "ls":
 		err = cmdList(withProfile(args))
+	case "set-args":
+		err = cmdSetArgs(withProfile(requireName(args, `topic set-args "<name>" -- <claude args...> | --clear`)))
 	case "status":
 		err = cmdStatusCmd(withProfile(requireName(args, `topic status "<name>"`)))
 	case "forget":
@@ -230,6 +256,59 @@ func main() {
 	if err != nil {
 		fail("%v", err)
 	}
+}
+
+func isHelpFlag(a string) bool { return a == "-h" || a == "--help" }
+
+// wantsHelp reports whether a subcommand was asked for help rather than run. A help
+// flag anywhere among the arguments counts — `topic up "X" --help` too — except where
+// arguments are free text: a daemon's command line (`daemon add <name> <dir> mytool
+// --help`) and the low-level helpers, which take arbitrary values.
+func wantsHelp(cmd string, args []string) bool {
+	switch cmd {
+	case "get", "set", "sessions", "find-titled", "transcript-title", "transcript-cwd":
+		return len(args) > 0 && isHelpFlag(args[0])
+	case "daemon":
+		if len(args) > 3 {
+			args = args[:3] // verb, name, dir; the rest is the daemon's own command
+		}
+	}
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if isHelpFlag(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandHelp is the part of usageText describing one command: every entry that
+// starts "  topic <cmd>", with its continuation lines. One source of truth, so the
+// per-command help cannot drift from the overview. Commands the overview does not
+// list (the low-level helpers) get the whole thing.
+func commandHelp(cmd string) string {
+	if cmd == "ls" {
+		cmd = "list"
+	}
+	var b strings.Builder
+	in := false
+	for _, line := range strings.Split(usageText, "\n") {
+		if strings.HasPrefix(line, "  topic ") {
+			rest := strings.TrimPrefix(line, "  topic ")
+			in = rest == cmd || strings.HasPrefix(rest, cmd+" ")
+		} else if !strings.HasPrefix(line, "   ") {
+			in = false // a blank line or prose ends the entry
+		}
+		if in {
+			b.WriteString(line + "\n")
+		}
+	}
+	if b.Len() == 0 {
+		return usageText
+	}
+	return "usage:\n" + b.String() + "\nRun `topic --help` for the full overview.\n"
 }
 
 func requireName(args []string, usage string) []string {

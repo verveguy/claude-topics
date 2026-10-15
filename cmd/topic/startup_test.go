@@ -23,6 +23,23 @@ bpja@bretts liminis-framework %`
     2. No, exit
   Enter to confirm · Esc to cancel`
 
+	// As captured from `topic up -- --dangerously-load-development-channels server:...`
+	// on Claude Code v2.1.300, 2026-10-15.
+	devChannelsQuestion = `  WARNING: Loading development channels
+
+  --dangerously-load-development-channels is for local channel development
+  only. Do not use this option to run channels you have downloaded off the
+  internet.
+
+  Please use --channels to run a list of approved channels.
+
+  Channels: server:fabrik
+
+  ❯ 1. I am using this for local development
+    2. Exit
+
+  Enter to confirm · Esc to cancel`
+
 	readyScreen = `  /remote-control is active · Continue here, on your phone, or at claude.ai/code`
 )
 
@@ -39,6 +56,7 @@ func TestClassifyStartup(t *testing.T) {
 		{"trust prompt is answered by topic", trustQuestion, false, startupTrust},
 		// After accepting, the dialog can linger a moment; it is not a new question.
 		{"lingering trust dialog after accepting", trustQuestion, true, startupWaiting},
+		{"dev channels confirmation", devChannelsQuestion, false, startupDevChannels},
 		{"ready", readyScreen, false, startupReady},
 		{"still loading", "bpja@bretts dev % CLAUDE_CONFIG_DIR=x claude --resume abc", false, startupWaiting},
 	}
@@ -70,5 +88,33 @@ func TestScreenTailKeepsTheLastNonBlankLines(t *testing.T) {
 	}
 	if strings.Count(screenTail(chromeQuestion, 8), "\n") != 5 {
 		t.Errorf("screenTail should keep all six lines of a short screen")
+	}
+}
+
+// topic confirms the development-channels screen only for what the user stored: the
+// flag in the topic's claudeArgs, and exactly the sources it names.
+func TestDevChannelsMatch(t *testing.T) {
+	flag := "--dangerously-load-development-channels"
+	multi := strings.Replace(devChannelsQuestion, "server:fabrik", "server:fabrik, plugin:x@y", 1)
+	cases := []struct {
+		name string
+		pane string
+		args []string
+		want bool
+	}{
+		{"the stored source", devChannelsQuestion, []string{flag, "server:fabrik"}, true},
+		{"= form", devChannelsQuestion, []string{flag + "=server:fabrik"}, true},
+		{"no stored args: not ours to answer", devChannelsQuestion, nil, false},
+		{"stored flag lists another source", devChannelsQuestion, []string{flag, "server:other"}, false},
+		{"screen lists more than was stored", multi, []string{flag, "server:fabrik"}, false},
+		{"screen lists fewer than was stored", devChannelsQuestion, []string{flag, "server:fabrik", "plugin:x@y"}, false},
+		{"both sources stored", multi, []string{flag, "server:fabrik", "plugin:x@y"}, true},
+		{"--channels is not the dev flag", devChannelsQuestion, []string{"--channels", "server:fabrik"}, false},
+		{"no channels line on screen", "I am using this for local development", []string{flag, "server:fabrik"}, false},
+	}
+	for _, c := range cases {
+		if got := devChannelsMatch(c.pane, c.args); got != c.want {
+			t.Errorf("%s: devChannelsMatch = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

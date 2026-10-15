@@ -165,6 +165,13 @@ func cmdStatus(args []string) error {
 			fmt.Printf("  %s: %s\n", k, v)
 		}
 	}
+	if ca, ok := m["claudeArgs"].([]any); ok && len(ca) > 0 {
+		a := make([]string, len(ca))
+		for i, v := range ca {
+			a[i] = scalar(v)
+		}
+		fmt.Printf("  claudeArgs: %s\n", quotedArgs(a))
+	}
 	if forks, ok := m["forks"].([]any); ok && len(forks) > 0 {
 		names := make([]string, 0, len(forks))
 		for _, f := range forks {

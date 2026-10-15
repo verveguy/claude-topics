@@ -80,8 +80,20 @@ func nonEmptyFile(path string) error {
 func cmdFork(args []string) error {
 	var name, dir, parent, brief string
 	var positional []string
+	inherit := true
+	var userArgs []string
+	if len(args) >= 2 {
+		var own []string
+		own, userArgs, _ = splitClaudeArgs(args[:len(args)-2])
+		args = append(own, args[len(args)-2:]...)
+	}
+	if err := checkClaudeArgs(userArgs); err != nil {
+		return err
+	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--no-inherit-args":
+			inherit = false
 		case "--from":
 			if i+1 < len(args) {
 				i++
@@ -97,7 +109,7 @@ func cmdFork(args []string) error {
 		}
 	}
 	if len(positional) < 3 {
-		return fmt.Errorf(`usage: topic fork "<new topic>" [dir] [--from "<parent>"] [--brief <file>]`)
+		return fmt.Errorf(`usage: topic fork "<new topic>" [dir] [--from "<parent>"] [--brief <file>] [--no-inherit-args] [-- <claude args...>]`)
 	}
 	name = positional[0]
 	configDir, topicsRoot := positional[len(positional)-2], positional[len(positional)-1]
@@ -158,24 +170,43 @@ func cmdFork(args []string) error {
 	}
 	fmt.Printf("  brief: %s\n", brief)
 
-	if err := launchSession(configDir, name, dir,
-		"--remote-control", name, "--name", name, "--session-id", sid, seed); err != nil {
-		return err
+	// The child runs with the parent's claude args unless told otherwise: a fork of a
+	// topic that takes channel pushes would otherwise silently stop receiving them.
+	childArgs := userArgs
+	if len(childArgs) == 0 && inherit && parent != "" {
+		childArgs = topicClaudeArgs(topicsRoot, parent)
+	}
+	if len(childArgs) > 0 {
+		fmt.Printf("  claude args: %s\n", quotedArgs(childArgs))
 	}
 
-	fields := []string{topicFile(topicsRoot, name),
-		"name", name, "dir", dir, "sessionId", sid, "state", "up",
-		"generation", "1", "seededFrom", brief, "lastPickedUp", nowISO()}
-	if parent != "" {
-		fields = append(fields, "forkedFrom", parent)
-	}
-	if err := cmdSet(fields); err != nil {
-		return err
-	}
-	if parent != "" {
-		if err := cmdPushFork([]string{topicFile(topicsRoot, parent), name}); err != nil {
+	launchErr := launchTopicWith(configDir, name, dir, childArgs,
+		"--remote-control", name, "--name", name, "--session-id", sid, seed)
+	// Registered even when the child is parked at a startup question: it is running,
+	// and an unregistered session is one `topic down` cannot find.
+	if err := recordLaunch(launchErr, func() error {
+		fields := []string{topicFile(topicsRoot, name),
+			"name", name, "dir", dir, "sessionId", sid, "state", "up",
+			"generation", "1", "seededFrom", brief, "lastPickedUp", nowISO()}
+		if parent != "" {
+			fields = append(fields, "forkedFrom", parent)
+		}
+		if err := cmdSet(fields); err != nil {
 			return err
 		}
+		// Stored with the session, not before it: a failed launch must not leave an
+		// entry holding nothing but claudeArgs.
+		if len(childArgs) > 0 {
+			if err := setClaudeArgs(topicsRoot, name, childArgs); err != nil {
+				return err
+			}
+		}
+		if parent != "" {
+			return cmdPushFork([]string{topicFile(topicsRoot, parent), name})
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	fmt.Printf("%q is up. Remote Control name: %q\n", name, name)
@@ -285,13 +316,15 @@ func cmdHandoffSwap(args []string) error {
 			"do not treat them as finished either.", focus)
 	}
 
-	if err := launchSession(configDir, name, dir,
-		"--remote-control", name, "--name", name, "--session-id", newSID, seed); err != nil {
-		return err
-	}
-	if err := cmdSet([]string{file, "name", name, "dir", dir, "sessionId", newSID,
-		"state", "up", "generation", strconv.Itoa(gen + 1),
-		"lastPickedUp", nowISO(), "lastHandoff", doc}); err != nil {
+	launchErr := launchTopic(configDir, topicsRoot, name, dir,
+		"--remote-control", name, "--name", name, "--session-id", newSID, seed)
+	// The old session is already stopped and archived, so a replacement parked at a
+	// startup question must be recorded or the registry names a session that is gone.
+	if err := recordLaunch(launchErr, func() error {
+		return cmdSet([]string{file, "name", name, "dir", dir, "sessionId", newSID,
+			"state", "up", "generation", strconv.Itoa(gen + 1),
+			"lastPickedUp", nowISO(), "lastHandoff", doc})
+	}); err != nil {
 		return err
 	}
 	fmt.Printf("%q is up on a fresh session (%s…). Old session archived in history.\n",

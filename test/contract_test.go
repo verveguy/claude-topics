@@ -340,3 +340,101 @@ func TestMoveIntoAScaffoldDirectory(t *testing.T) {
 		t.Error("source registry entry survived the move")
 	}
 }
+
+// `topic <cmd> --help` explains the command; it must never run it. Claude reaches for
+// `topic up --help` to learn the CLI, and that used to create a topic named "--help".
+func TestSubcommandHelpDoesNotRun(t *testing.T) {
+	e := newEnv(t)
+	for _, c := range []struct {
+		args []string
+		cmd  string
+	}{
+		{[]string{"up", "--help"}, "up"}, {[]string{"up", "-h"}, "up"},
+		{[]string{"up", "Some Topic", "--help"}, "up"},
+		{[]string{"down", "--help"}, "down"}, {[]string{"fork", "--help"}, "fork"},
+		{[]string{"help", "up"}, "up"},
+	} {
+		r := e.mustRun(c.args...)
+		// The command's own entry, and only it: the full overview also contains
+		// "topic <anything>", so asserting on the name alone would pass even if the
+		// argument were ignored and everything printed.
+		mustContain(t, r.stdout, "  topic "+c.cmd+" ", "help for "+strings.Join(c.args, " "))
+		if strings.Contains(r.stdout, "topic down-all") && c.cmd != "down" {
+			t.Errorf("%v printed the whole overview, not just %s's entry", c.args, c.cmd)
+		}
+	}
+	r := e.mustRun("up", "--help")
+	mustContain(t, r.stdout, "--seed-from", "up's help should describe its flags")
+	entries, _ := os.ReadDir(e.topicsRoot)
+	for _, d := range entries {
+		t.Errorf("help created registry entry %q", d.Name())
+	}
+}
+
+// An unknown flag to `up` is an error, not the name of a new topic.
+func TestUpRejectsUnknownFlag(t *testing.T) {
+	e := newEnv(t)
+	r := e.run("up", "--verbose")
+	if r.code == 0 {
+		t.Fatalf("topic up --verbose succeeded:\n%s", r.out())
+	}
+	mustContain(t, r.stderr, "unknown flag", "should name the problem")
+	entries, _ := os.ReadDir(e.topicsRoot)
+	for _, d := range entries {
+		t.Errorf("unknown flag created registry entry %q", d.Name())
+	}
+}
+
+// claudeArgs (issue #7): stored per topic, visible, clearable, and never allowed to
+// collide with the arguments topic owns.
+func TestSetArgsStoresShowsAndClears(t *testing.T) {
+	e := newEnv(t)
+	e.seedTopic("chan", map[string]any{"name": "Chan", "dir": "/tmp", "sessionId": "s"})
+
+	e.mustRun("set-args", "Chan", "--", "--dangerously-load-development-channels", "server:fabrik")
+	got, _ := e.readTopic("chan")["claudeArgs"].([]any)
+	if len(got) != 2 || got[1] != "server:fabrik" {
+		t.Fatalf("claudeArgs = %v", e.readTopic("chan")["claudeArgs"])
+	}
+	mustContain(t, e.mustRun("status", "Chan").stdout,
+		"claudeArgs: --dangerously-load-development-channels server:fabrik", "status should show the args")
+	mustContain(t, e.mustRun("list").stdout, "Chan  [+args]", "list should mark the topic")
+
+	e.mustRun("set-args", "Chan", "--clear")
+	if _, ok := e.readTopic("chan")["claudeArgs"]; ok {
+		t.Error("--clear left claudeArgs in the registry")
+	}
+	if strings.Contains(e.mustRun("list").stdout, "[+args]") {
+		t.Error("list still marks a cleared topic")
+	}
+}
+
+func TestClaudeArgsRefuseOwnedFlags(t *testing.T) {
+	e := newEnv(t)
+	e.seedTopic("chan", map[string]any{"name": "Chan", "dir": "/tmp", "sessionId": "s"})
+	for flag, args := range map[string][]string{
+		"--resume":     {"up", "New", "--", "--resume", "abc"},
+		"--session-id": {"set-args", "Chan", "--", "--session-id=x"},
+	} {
+		r := e.run(args...)
+		if r.code == 0 {
+			t.Errorf("topic %v succeeded", args)
+		}
+		mustContain(t, r.stderr, flag, "should name the colliding flag")
+	}
+	if e.exists("new", "topic.json") {
+		t.Error("a refused up still created the topic")
+	}
+	if _, ok := e.readTopic("chan")["claudeArgs"]; ok {
+		t.Error("a refused set-args still stored args")
+	}
+}
+
+func TestSetArgsNeedsAnExistingTopic(t *testing.T) {
+	e := newEnv(t)
+	r := e.run("set-args", "Nope", "--", "--verbose")
+	if r.code == 0 {
+		t.Fatal("set-args on a missing topic succeeded")
+	}
+	mustContain(t, r.stderr, "no such topic", "should say why")
+}

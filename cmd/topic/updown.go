@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -79,6 +80,17 @@ func atoi(s string) int {
 func cmdUp(args []string) error {
 	claim, seedFrom := false, ""
 	var positional []string
+	// The profile is always appended last; everything after a "--" before it is
+	// claude's, to be stored as the topic's claudeArgs.
+	var userArgs []string
+	if len(args) >= 2 {
+		var own []string
+		own, userArgs, _ = splitClaudeArgs(args[:len(args)-2])
+		args = append(own, args[len(args)-2:]...)
+	}
+	if err := checkClaudeArgs(userArgs); err != nil {
+		return err
+	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--claim":
@@ -90,11 +102,16 @@ func cmdUp(args []string) error {
 			i++
 			seedFrom = args[i]
 		default:
+			// An unrecognised flag is a mistake, not a topic name: taking it as one
+			// creates a topic called "--verbose".
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown flag for up: %s (try: topic up --help)", args[i])
+			}
 			positional = append(positional, args[i])
 		}
 	}
 	if len(positional) < 3 {
-		return fmt.Errorf(`usage: topic up "<name>" [dir] [--claim] [--seed-from <file>]`)
+		return fmt.Errorf(`usage: topic up "<name>" [dir] [--claim] [--seed-from <file>] [-- <claude args...>]`)
 	}
 	// name [dir] config-dir topics-root
 	name := positional[0]
@@ -158,7 +175,29 @@ func cmdUp(args []string) error {
 	if isUp(tag, name) {
 		fmt.Printf("%q is already up.\n", name)
 		fmt.Printf("  attach: tmux attach -t %q\n", tmuxName(tag, name))
+		// Only for a topic with a registry entry: writing one here would create an entry
+		// holding nothing but claudeArgs.
+		if len(userArgs) > 0 && fileExists(file) {
+			if err := setClaudeArgs(topicsRoot, name, userArgs); err != nil {
+				return err
+			}
+			fmt.Printf("  claude args recorded (%s) — they apply from the next launch;\n", quotedArgs(userArgs))
+			fmt.Println("  the running session is unaffected.")
+		}
 		return nil
+	}
+
+	// Given args replace the stored list; otherwise the stored list is used. They are
+	// stored only once the launch has produced a session (see recordLaunch below).
+	extra := userArgs
+	if len(extra) == 0 {
+		extra = topicClaudeArgs(topicsRoot, name)
+	}
+	storeArgs := func() error {
+		if len(userArgs) == 0 {
+			return nil
+		}
+		return setClaudeArgs(topicsRoot, name, userArgs)
 	}
 
 	if dir == "" {
@@ -174,8 +213,8 @@ func cmdUp(args []string) error {
 			fmt.Fprintf(os.Stderr, "note: --seed-from ignored; %q has an existing session to resume.\n", name)
 		}
 		fmt.Printf("Picking up %q (resuming session %s…) in %s\n", name, truncate(sid, 8), dir)
-		if err := launchSession(configDir, name, dir,
-			"--remote-control", name, "--name", name, "--resume", sid); err != nil {
+		if err := recordLaunch(launchTopicWith(configDir, name, dir, extra,
+			"--remote-control", name, "--name", name, "--resume", sid), storeArgs); err != nil {
 			return err
 		}
 	} else {
@@ -189,14 +228,21 @@ func cmdUp(args []string) error {
 					"the context you need. Summarise briefly what you picked up, then continue from there.",
 				name, seedFrom))
 		}
-		if err := launchSession(configDir, name, dir, launchArgs...); err != nil {
-			return err
-		}
-		fields := []string{"name", name, "generation", "1"}
-		if seedFrom != "" {
-			fields = append(fields, "seededFrom", seedFrom)
-		}
-		if err := cmdSet(append([]string{file}, fields...)); err != nil {
+		launchErr := launchTopicWith(configDir, name, dir, extra, launchArgs...)
+		// A session parked at a startup question is still running and still this
+		// topic's: register it, or `topic down` cannot find it and the next `up` starts
+		// a different session, in whatever directory the shell happens to be in.
+		if err := recordLaunch(launchErr, func() error {
+			fields := []string{"name", name, "generation", "1", "dir", dir, "sessionId", sid,
+				"state", "up", "lastPickedUp", nowISO()}
+			if seedFrom != "" {
+				fields = append(fields, "seededFrom", seedFrom)
+			}
+			if err := cmdSet(append([]string{file}, fields...)); err != nil {
+				return err
+			}
+			return storeArgs()
+		}); err != nil {
 			return err
 		}
 	}

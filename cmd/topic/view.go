@@ -138,7 +138,7 @@ func cmdList(args []string) error {
 				if label == "" {
 					label = "(default)"
 				}
-				fmt.Printf("  %-7s %-12s %s\n", state, label, name)
+				fmt.Printf("  %-7s %-12s %s%s\n", state, label, name, argsMark(filepath.Join(p, "topics"), name))
 			}
 		}
 		if !any {
@@ -168,7 +168,7 @@ func cmdList(args []string) error {
 			// honestly rather than calling a live session "down".
 			state = "ADOPTED"
 		}
-		fmt.Printf("  %-7s %s\n", state, name)
+		fmt.Printf("  %-7s %s%s\n", state, name, argsMark(topicsRoot, name))
 	}
 	return nil
 }
@@ -220,4 +220,13 @@ func cmdProfiles(args []string) error {
 	fmt.Println()
 	fmt.Println("  * = active. Use another with: CLAUDE_CONFIG_DIR=<dir> topic <cmd>")
 	return nil
+}
+
+// argsMark flags a topic that launches with extra claude args: they change what the
+// session can do (channel pushes, say), so a listing should not hide them.
+func argsMark(topicsRoot, name string) string {
+	if len(topicClaudeArgs(topicsRoot, name)) > 0 {
+		return "  [+args]"
+	}
+	return ""
 }
