@@ -342,7 +342,7 @@ func TestLiveClaudeArgsSurviveDownAndUp(t *testing.T) {
 // claudeCmdline is the argv of the claude process under a topic's tmux pane.
 func claudeCmdline(t *testing.T, e *env, name string) string {
 	t.Helper()
-	out, err := exec.Command("tmux", "display", "-p", "-t", "="+tmuxName(e, name), "#{pane_pid}").Output()
+	out, err := exec.Command("tmux", "display", "-p", "-t", "="+tmuxName(e, name)+":", "#{pane_pid}").Output()
 	if err != nil {
 		t.Fatalf("no tmux pane for %q: %v", name, err)
 	}
