@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -89,5 +90,37 @@ func TestWithoutEnv(t *testing.T) {
 	want := []string{"A=1", "TMUXED=keep", "B=2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestEscapeTmuxFormat(t *testing.T) {
+	cases := map[string]string{
+		"plain":       "plain",
+		"#(rm -rf /)": "##(rm -rf /)",
+		"#{pane_id}":  "##{pane_id}",
+		"a # b ## c":  "a ## b #### c",
+	}
+	for in, want := range cases {
+		if got := escapeTmuxFormat(in); got != want {
+			t.Errorf("escapeTmuxFormat(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLastLine(t *testing.T) {
+	boom := errors.New("exit status 1")
+	cases := []struct {
+		out  string
+		want string
+	}{
+		{"", "exit status 1"},
+		{"  \n\n", "exit status 1"},
+		{"starting\nno such topic: \"x\"\n", `no such topic: "x"`},
+		{"only", "only"},
+	}
+	for _, c := range cases {
+		if got := lastLine(c.out, boom); got != c.want {
+			t.Errorf("lastLine(%q) = %q, want %q", c.out, got, c.want)
+		}
 	}
 }

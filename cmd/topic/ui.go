@@ -247,6 +247,25 @@ func openUI(p profile, noAttach bool) error {
 	return cmd.Run()
 }
 
+// uiMessage flashes text in the UI's status line. display-message expands tmux formats
+// (#{...}, #(cmd)) in its argument, and topic names and command output are user data, so
+// every '#' is doubled to make it literal.
+func uiMessage(text string) {
+	_ = uiTmux("display-message", "-d", "5000", escapeTmuxFormat(text)).Run()
+}
+
+func escapeTmuxFormat(s string) string { return strings.ReplaceAll(s, "#", "##") }
+
+// lastLine is the last non-empty line of a command's output, or the error if it said
+// nothing: enough to explain a failure in one status line.
+func lastLine(out string, err error) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if l := strings.TrimSpace(lines[len(lines)-1]); l != "" {
+		return l
+	}
+	return err.Error()
+}
+
 // withoutEnv returns environ minus the named variable.
 func withoutEnv(environ []string, name string) []string {
 	var out []string
@@ -278,11 +297,16 @@ func runPicker(p profile) error {
 		}
 		switch row.state {
 		case "ADOPTED":
-			_ = uiTmux("display-message", fmt.Sprintf("%q is still running outside tmux: exit it, then topic up", row.label)).Run()
+			uiMessage(fmt.Sprintf("%q is still running outside tmux: exit it, then topic up", row.label))
 			continue
 		case "down":
-			_ = uiTmux("display-message", fmt.Sprintf("picking up %q...", row.label)).Run()
-			_ = exec.Command(self, "up", row.label).Run()
+			uiMessage(fmt.Sprintf("picking up %q...", row.label))
+			if out, err := exec.Command(self, "up", row.label).CombinedOutput(); err != nil {
+				// Attaching to a session that never started would leave the right pane
+				// dead with a bare tmux error; say why instead.
+				uiMessage(fmt.Sprintf("could not pick up %q: %s", row.label, lastLine(string(out), err)))
+				continue
+			}
 		}
 		out, err := uiTmux("show", "-gv", "@right-pane").Output()
 		if err != nil {
