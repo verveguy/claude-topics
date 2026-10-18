@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# topics-ui: topic list on the left, the selected topic's tmux session on the right.
+# Runs on its own tmux server (-L topics-ui) so it nests cleanly over the topic sessions.
+# Outer prefix is C-a; inside the right pane, C-b still drives the topic's own tmux.
+UI="tmux -L topics-ui"
+# Resolve through the ~/.local/bin symlink to find the sibling picker script.
+HERE="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")" && pwd)"
+
+if ! $UI has-session -t topics-ui 2>/dev/null; then
+  # Address panes by id, never by index: base-index / pane-base-index vary by tmux.conf.
+  left=$($UI new-session -d -P -F '#{pane_id}' -s topics-ui -x 220 -y 55 "$HERE/topics-list")
+  $UI set -g prefix C-a
+  $UI bind C-a send-prefix
+  $UI set -g mouse on
+  $UI set -g remain-on-exit on
+  $UI set -g status-right ' C-a h: list | C-a l: session | C-a d: detach '
+  $UI bind h select-pane -L
+  $UI bind l select-pane -R
+  right=$($UI split-window -h -l 75% -P -F '#{pane_id}' -t "$left" "echo 'Select a topic on the left.'; exec $SHELL")
+  $UI set -g @right-pane "$right"
+  $UI select-pane -t "$left"
+fi
+
+exec env -u TMUX $UI attach -t topics-ui

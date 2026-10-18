@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# topics-list: fzf topic picker, run in the left pane of topics-ui.
+# Selecting a topic points the right pane at that topic's tmux session.
+UI="tmux -L topics-ui"
+# This pane runs inside the UI's own tmux server, so $TMUX points there. topic and the
+# preview must talk to the default server, where the topic sessions live.
+unset TMUX
+
+while true; do
+  row=$(topic list 2>/dev/null \
+    | awk '$1 ~ /^(UP|down|ADOPTED)$/ { s=$1; $1=""; sub(/^ +/,""); printf "%s\t%s\n", s, $0 }' \
+    | fzf --delimiter='\t' --with-nth=1,2 --no-sort --reverse \
+          --header='enter: open   ctrl-r: refresh   (C-a l: right pane)' \
+          --bind='ctrl-r:reload(topic list 2>/dev/null | awk '"'"'$1 ~ /^(UP|down|ADOPTED)$/ { s=$1; $1=""; sub(/^ +/,""); printf "%s\t%s\n", s, $0 }'"'"')' \
+          --preview='if [ {1} = UP ]; then tmux capture-pane -ep -t {2}; else echo "{1}: press enter to pick up"; fi' \
+          --preview-window='down,50%')
+  [ -z "$row" ] && continue
+  status=${row%%$'\t'*}
+  name=${row#*$'\t'}
+
+  case "$status" in
+    ADOPTED)
+      $UI display-message "\"$name\" is still running outside tmux: exit it, then topic up"
+      continue ;;
+    down)
+      $UI display-message "picking up \"$name\"..."
+      topic up "$name" >/dev/null 2>&1 ;;
+  esac
+
+  RIGHT=$($UI show -gv @right-pane)
+  $UI respawn-pane -k -t "$RIGHT" "$(printf 'env -u TMUX tmux attach -t %q' "$name")"
+  $UI select-pane -t "$RIGHT"
+done

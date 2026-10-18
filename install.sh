@@ -51,6 +51,9 @@ if [[ $UNINSTALL -eq 1 ]]; then
   done
   [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
+  for t in topics-ui topics-list; do
+    [[ -L "$BIN/$t" ]] && { rm -f "$BIN/$t"; say "removed $BIN/$t"; }
+  done
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
   echo "Left in place (deliberately — this is your data, not the tool):"
@@ -91,6 +94,8 @@ echo "Installing from $REPO"
 say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
 link "$REPO/bin/topic"          "$BIN/topic"
+link "$REPO/scripts/topics-ui"   "$BIN/topics-ui"
+link "$REPO/scripts/topics-list" "$BIN/topics-list"
 
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
