@@ -347,22 +347,23 @@ under any profile whose Dispatcher agent is loaded. Each start appends
 `echo "[topic] daemon <name> exited with status $?"`, so an exit is visible in the pane:
 daemons have exited without logging why.
 
-### `topics-ui` — browse topics side by side
+### `topic ui` — browse topics side by side
 
 ```bash
-topics-ui
+topic ui
 ```
 
-A topic list on the left, the selected topic's tmux session on the right. Enter on a
-**down** topic picks it up first; an **adopted** topic is refused until you exit the
-original session. `Ctrl-r` refreshes the list.
+A topic list on the left, grouped by working directory, and the selected topic's tmux
+session on the right. Enter on a **down** topic picks it up first; an **adopted** topic is
+refused until you exit the original session. `Ctrl-r` refreshes the list.
 
 It runs on its own tmux server (`-L topics-ui`) with prefix `C-a`, so inside the right
 pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l` move between the panes
-and `C-a d` detaches. The mouse works.
+and `C-a d` detaches. The mouse works. `topic ui --no-attach` builds the layout without
+attaching, which is what the tests use.
 
-Needs `fzf` (`brew install fzf`). `install.sh` links `topics-ui` and `topics-list` into
-`~/.local/bin`; the scripts live in `scripts/`.
+`fzf` is optional: with it you get type-to-filter and live reload; without it the left
+pane is a numbered menu. (`brew install fzf`.)
 
 ## Getting it
 
