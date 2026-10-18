@@ -35,6 +35,8 @@ what makes hand-off possible.
                               prefix C-a; C-a h / C-a l switch panes, C-a d detaches.
                               Uses fzf if installed, else a numbered menu.
                               --no-attach builds the layout without attaching.
+                              C-a q (or topic ui --quit) closes the UI; topics keep
+                              running.
   topic set-args "<name>" -- <claude args...>  |  --clear
                               Replace (or clear) the extra claude arguments every
                               launch of this topic adds — up, handoff, fork, move,

@@ -42,11 +42,11 @@ func TestBuildRowsGroupsByDirectory(t *testing.T) {
 	}
 	got := buildRows(root, "/home/me", 40, state)
 	want := []uiRow{
-		{label: "-- (no directory)"},
+		{label: "(no directory)"},
 		{"down", "Strayed"},
-		{label: "-- ~/dev/ainative"},
+		{label: "~/dev/ainative"},
 		{"down", "Kiln"},
-		{label: "-- ~/dev/jetpack"},
+		{label: "~/dev/jetpack"},
 		{"down", "Alpha"},
 		{"UP", "orac"},
 		{"down", "zen"},

@@ -94,7 +94,7 @@ func buildRows(topicsRoot, home string, maxDir int, state func(name string) stri
 
 	var rows []uiRow
 	for _, d := range dirs {
-		rows = append(rows, uiRow{label: "-- " + shortDir(d, home, maxDir)})
+		rows = append(rows, uiRow{label: shortDir(d, home, maxDir)})
 		names := groups[d]
 		sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
 		for _, n := range names {
@@ -104,7 +104,46 @@ func buildRows(topicsRoot, home string, maxDir int, state func(name string) stri
 	return rows
 }
 
-func (r uiRow) line() string { return r.state + "\t" + r.label }
+// Picker rows are STATE<TAB>DISPLAY<TAB>LABEL. STATE and LABEL are what the picker parses
+// on selection; only DISPLAY is shown (--with-nth=2). DISPLAY is a coloured arrow and the
+// name in one field, because a tab between them would expand to eight columns of a pane
+// that has thirty.
+const (
+	ansiGreen  = "\033[32m"
+	ansiRed    = "\033[31m"
+	ansiYellow = "\033[33m"
+	ansiDim    = "\033[2m"
+	ansiReset  = "\033[0m"
+)
+
+// colour wraps s in an ANSI colour unless the user asked for none (NO_COLOR).
+func colour(code, s string) string {
+	if os.Getenv("NO_COLOR") != "" {
+		return s
+	}
+	return code + s + ansiReset
+}
+
+// mark is the status glyph: up and down arrows, and a diamond for a session that runs
+// outside tmux, each in its own colour.
+func (r uiRow) mark() string {
+	switch r.state {
+	case "UP":
+		return colour(ansiGreen, "▲")
+	case "down":
+		return colour(ansiRed, "▼")
+	case "ADOPTED":
+		return colour(ansiYellow, "◆")
+	}
+	return ""
+}
+
+func (r uiRow) line() string {
+	if r.state == "" { // a directory heading
+		return "\t" + colour(ansiDim, "── "+r.label) + "\t"
+	}
+	return r.state + "\t" + r.mark() + " " + r.label + "\t" + r.label
+}
 
 func currentRows(p profile) []uiRow {
 	home, _ := os.UserHomeDir()
@@ -116,7 +155,7 @@ func currentRows(p profile) []uiRow {
 
 // cmdUI dispatches the three modes.
 func cmdUI(args []string, p profile) error {
-	var rows, pick, noAttach bool
+	var rows, pick, noAttach, quit bool
 	for _, a := range args {
 		switch a {
 		case "--rows":
@@ -125,6 +164,8 @@ func cmdUI(args []string, p profile) error {
 			pick = true
 		case "--no-attach":
 			noAttach = true
+		case "--quit":
+			quit = true
 		default:
 			return fmt.Errorf("ui: unknown option %q (try: topic ui --help)", a)
 		}
@@ -137,6 +178,13 @@ func cmdUI(args []string, p profile) error {
 		return nil
 	case pick:
 		return runPicker(p)
+	case quit:
+		// Only the UI's own server goes; the topics live on the default one and keep running.
+		if uiTmux("has-session", "-t", "="+uiSocket()).Run() != nil {
+			fmt.Println("the topic UI is not running")
+			return nil
+		}
+		return uiTmux("kill-server").Run()
 	}
 	return openUI(p, noAttach)
 }
@@ -164,7 +212,14 @@ func openUI(p profile, noAttach bool) error {
 			{"bind", "C-a", "send-prefix"},
 			{"set", "-g", "mouse", "on"},
 			{"set", "-g", "remain-on-exit", "on"},
-			{"set", "-g", "status-right", " C-a h: list | C-a l: session | C-a d: detach "},
+			{"set", "-g", "status-right", " C-a h: list | C-a l: session | C-a d: detach | C-a q: quit "},
+			{"bind", "q", "confirm-before", "-p", "close the topic UI? (topics keep running) (y/n)", "kill-server"},
+			// tmux shrinks the first pane first when a client is narrower than the window
+			// was built for (a 54-column list became 4). main-vertical pins the list to a
+			// fixed width and is reapplied whenever a client attaches or resizes.
+			{"setw", "-g", "main-pane-width", "34"},
+			{"set-hook", "-g", "client-attached", "select-layout main-vertical"},
+			{"set-hook", "-g", "client-resized", "select-layout main-vertical"},
 			{"bind", "h", "select-pane", "-L"},
 			{"bind", "l", "select-pane", "-R"},
 		} {
@@ -180,6 +235,7 @@ func openUI(p profile, noAttach bool) error {
 		if err := uiTmux("set", "-g", "@right-pane", strings.TrimSpace(string(out))).Run(); err != nil {
 			return err
 		}
+		_ = uiTmux("select-layout", "main-vertical").Run()
 		_ = uiTmux("select-pane", "-t", left).Run()
 	}
 	if noAttach {
@@ -254,7 +310,7 @@ func chooseFzf(fzf string, rows []uiRow, self string) (uiRow, bool, error) {
 	for _, r := range rows {
 		in.WriteString(r.line() + "\n")
 	}
-	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=1,2", "--no-sort", "--reverse",
+	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--reverse",
 		"--header=enter: open  ^r: refresh",
 		"--bind=ctrl-r:reload("+shellQuote(self)+" ui --rows)")
 	cmd.Stdin = strings.NewReader(in.String())
@@ -268,8 +324,11 @@ func chooseFzf(fzf string, rows []uiRow, self string) (uiRow, bool, error) {
 		}
 		return uiRow{}, false, fmt.Errorf("ui: fzf: %w", err)
 	}
-	state, label, _ := strings.Cut(strings.TrimRight(string(out), "\n"), "\t")
-	return uiRow{state: state, label: label}, true, nil
+	f := strings.Split(strings.TrimRight(string(out), "\n"), "\t")
+	if len(f) != 3 {
+		return uiRow{}, false, nil
+	}
+	return uiRow{state: f[0], label: f[2]}, true, nil
 }
 
 func chooseMenu(rows []uiRow) (uiRow, bool, error) {
@@ -277,11 +336,11 @@ func chooseMenu(rows []uiRow) (uiRow, bool, error) {
 	var pickable []uiRow
 	for _, r := range rows {
 		if r.state == "" {
-			fmt.Println(r.label)
+			fmt.Println(colour(ansiDim, "── "+r.label))
 			continue
 		}
 		pickable = append(pickable, r)
-		fmt.Printf("%3d  %-7s %s\n", len(pickable), r.state, r.label)
+		fmt.Printf("%3d  %s  %s\n", len(pickable), r.mark(), r.label)
 	}
 	fmt.Print("\nnumber to open, Enter to refresh: ")
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')

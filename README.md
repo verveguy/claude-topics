@@ -359,7 +359,9 @@ refused until you exit the original session. `Ctrl-r` refreshes the list.
 
 It runs on its own tmux server (`-L topics-ui`) with prefix `C-a`, so inside the right
 pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l` move between the panes
-and `C-a d` detaches. The mouse works. `topic ui --no-attach` builds the layout without
+`C-a d` detaches (the UI keeps running; `topic ui` reattaches), and `C-a q` closes it —
+or `topic ui --quit` from another terminal. The topics themselves keep running. The mouse
+works. Status shows as a coloured arrow: green ▲ up, red ▼ down, yellow ◆ adopted. `topic ui --no-attach` builds the layout without
 attaching, which is what the tests use.
 
 `fzf` is optional: with it you get type-to-filter and live reload; without it the left
