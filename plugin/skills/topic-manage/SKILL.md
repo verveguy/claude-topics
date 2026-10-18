@@ -187,8 +187,10 @@ Both are lossless and both take `--dry-run`; show the user the dry run first.
   auto-derived `<dir>-<hash>` name that cannot be addressed by topic name.
 - If the account's organization disables Remote Control, the session still starts and
   shows "Remote Control is disabled by your organization's policy". That is expected,
-  not a failure: point the user to `tmux attach -t "<name>"` or SendMessage instead
-  of claude.ai, and skip any advice about bridges or archiving cloud sessions.
+  not a failure: point the user to the `tmux attach` command `topic up` prints (the
+  tmux name is not always the topic name — profiles prefix it, and `:` and `.` become
+  `-`), or to SendMessage by topic name, instead of claude.ai. Skip any advice about
+  bridges or archiving cloud sessions.
 - State lives in `<profile>/topics/<slug>/topic.json`.
 - **Profiles:** `topic` follows `CLAUDE_CONFIG_DIR` like `claude` does. If the user
   runs more than one profile, topics are per-profile and do not appear in each

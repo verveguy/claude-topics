@@ -38,7 +38,7 @@ var startupPatterns = struct {
 	devChannelsList:   regexp.MustCompile(`Channels:\s*(.+)`),
 	// The session is usable. An account whose organization disables Remote Control
 	// prints neither banner, but Claude Code still starts and says so instead.
-	ready: regexp.MustCompile(`(?i)Welcome back|remote-control is active|Remote\s+Control\s+is\s+disabled`),
+	ready: regexp.MustCompile(`(?i)Welcome back|remote-control is active|` + remoteControlDisabled),
 	// First-run setup — a theme and an account are the user's choices, not ours.
 	onboarding: regexp.MustCompile(`(?i)colorblind-friendly|Select login method|Choose the text style`),
 	// A security question about loading files from outside the working directory.
@@ -678,15 +678,22 @@ var remoteControlPatterns = struct {
 	// turned Remote Control off (Claude Enterprise, v2.1.302). The session runs normally;
 	// it just never gets a bridge, so there is no bridge record for move, rename or
 	// rebridge to retire.
-	disabled: regexp.MustCompile(`Remote\s+Control\s+is\s+disabled`),
+	disabled: regexp.MustCompile(remoteControlDisabled),
 }
+
+// remoteControlDisabled is the notice's wording, shared by the readiness check and
+// upMessage so a change in Claude Code's text cannot fix one and not the other.
+const remoteControlDisabled = `Remote\s+Control\s+is\s+disabled`
 
 // upMessage is the line that reports a topic up. The Remote Control name is only worth
 // printing when there is a bridge to find it by; without one, the ways in are tmux and
-// SendMessage, which --name keeps working regardless.
+// SendMessage, which --name keeps working regardless. It searches the scrollback, not
+// just the screen: the notice is printed once, at launch, and a resumed transcript or a
+// seed prompt's first turn can push it off before this runs.
 func upMessage(configDir, name string) string {
 	tn := tmuxName(profileTag(configDir), name)
-	if remoteControlPatterns.disabled.MatchString(capturePane(tn)) {
+	history, _ := tmuxCmd("capture-pane", "-t", tn, "-p", "-S", "-").Output()
+	if remoteControlPatterns.disabled.Match(history) {
 		return fmt.Sprintf("%q is up. Remote Control is disabled for this account — reach it with\n"+
 			"  tmux attach -t %q, or SendMessage to %q from another session", name, tn, name)
 	}
