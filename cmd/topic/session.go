@@ -336,7 +336,10 @@ func shellQuote(s string) string {
 			break
 		}
 	}
-	if safe {
+	// zsh expands a leading "=" as a command lookup (=orac -> /path/to/orac, or "orac not
+	// found"), so a word that starts with one is not safe bare even though "=" is
+	// harmless elsewhere. `tmux -t =name` is exactly such a word.
+	if safe && !strings.HasPrefix(s, "=") {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
