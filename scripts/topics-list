@@ -10,10 +10,8 @@ while true; do
   row=$(topic list 2>/dev/null \
     | awk '$1 ~ /^(UP|down|ADOPTED)$/ { s=$1; $1=""; sub(/^ +/,""); printf "%s\t%s\n", s, $0 }' \
     | fzf --delimiter='\t' --with-nth=1,2 --no-sort --reverse \
-          --header='enter: open   ctrl-r: refresh   (C-a l: right pane)' \
-          --bind='ctrl-r:reload(topic list 2>/dev/null | awk '"'"'$1 ~ /^(UP|down|ADOPTED)$/ { s=$1; $1=""; sub(/^ +/,""); printf "%s\t%s\n", s, $0 }'"'"')' \
-          --preview='if [ {1} = UP ]; then tmux capture-pane -ep -t {2}; else echo "{1}: press enter to pick up"; fi' \
-          --preview-window='down,50%')
+          --header='enter: open  ^r: refresh' \
+          --bind='ctrl-r:reload(topic list 2>/dev/null | awk '"'"'$1 ~ /^(UP|down|ADOPTED)$/ { s=$1; $1=""; sub(/^ +/,""); printf "%s\t%s\n", s, $0 }'"'"')')
   [ -z "$row" ] && continue
   status=${row%%$'\t'*}
   name=${row#*$'\t'}
