@@ -36,8 +36,9 @@ var startupPatterns = struct {
 	devChannels:       regexp.MustCompile(`dangerously-load-development-channels is for local\s+channel development`),
 	devChannelsAccept: regexp.MustCompile(`I am using this for local development`),
 	devChannelsList:   regexp.MustCompile(`Channels:\s*(.+)`),
-	// The session is usable.
-	ready: regexp.MustCompile(`(?i)Welcome back|remote-control is active`),
+	// The session is usable. An account whose organization disables Remote Control
+	// prints neither banner, but Claude Code still starts and says so instead.
+	ready: regexp.MustCompile(`(?i)Welcome back|remote-control is active|` + remoteControlDisabled),
 	// First-run setup — a theme and an account are the user's choices, not ours.
 	onboarding: regexp.MustCompile(`(?i)colorblind-friendly|Select login method|Choose the text style`),
 	// A security question about loading files from outside the working directory.
@@ -666,7 +667,7 @@ func syncLiveSessions(configDir, topicsRoot string) {
 // remoteControlPatterns key on Claude Code's /remote-control UI. Like startupPatterns,
 // this is the place to look first if Claude Code changes its wording.
 var remoteControlPatterns = struct {
-	connected, disconnectOption, disconnected *regexp.Regexp
+	connected, disconnectOption, disconnected, disabled *regexp.Regexp
 }{
 	// The slash-command autocomplete describes /remote-control by what it would do.
 	// It reads "Disconnect Remote Control" only while a bridge is connected; otherwise
@@ -676,6 +677,30 @@ var remoteControlPatterns = struct {
 	disconnectOption: regexp.MustCompile(`Disconnect this session`),
 	// Printed once Claude Code has ended the bridge.
 	disconnected: regexp.MustCompile(`Remote Control disconnected`),
+	// Printed at launch, in place of the bridge, when the account's organization has
+	// turned Remote Control off (Claude Enterprise, v2.1.302). The session runs normally;
+	// it just never gets a bridge, so there is no bridge record for move, rename or
+	// rebridge to retire.
+	disabled: regexp.MustCompile(remoteControlDisabled),
+}
+
+// remoteControlDisabled is the notice's wording, shared by the readiness check and
+// upMessage so a change in Claude Code's text cannot fix one and not the other.
+const remoteControlDisabled = `Remote\s+Control\s+is\s+disabled`
+
+// upMessage is the line that reports a topic up. The Remote Control name is only worth
+// printing when there is a bridge to find it by; without one, the ways in are tmux and
+// SendMessage, which --name keeps working regardless. It searches the scrollback, not
+// just the screen: the notice is printed once, at launch, and a resumed transcript or a
+// seed prompt's first turn can push it off before this runs.
+func upMessage(configDir, name string) string {
+	tn := tmuxName(profileTag(configDir), name)
+	history, _ := tmuxCmd("capture-pane", "-t", tn, "-p", "-S", "-").Output()
+	if remoteControlPatterns.disabled.Match(history) {
+		return fmt.Sprintf("%q is up. Remote Control is disabled for this account — reach it with\n"+
+			"  tmux attach -t %q, or SendMessage to %q from another session", name, tn, name)
+	}
+	return fmt.Sprintf("%q is up. Remote Control name: %q", name, name)
 }
 
 // cloudSessionURL is where a bridge's cloud session appears in the Claude UI.

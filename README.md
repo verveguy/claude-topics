@@ -121,7 +121,18 @@ Every session is launched with **both** `--remote-control "<name>"` and
 | Path | Reach |
 |------|-------|
 | tmux | local attach, SSH attach, survives disconnect |
-| Remote Control | claude.ai / phone, **and** other Claude sessions via `ListAgents` / `SendMessage` |
+| Remote Control | claude.ai / phone |
+
+Other Claude sessions on the machine reach a topic by name through `ListAgents` /
+`SendMessage` either way: that comes from `--name`, not Remote Control.
+
+**Without Remote Control.** Some organizations turn Remote Control off (Claude
+Enterprise can). Claude Code then prints "Remote Control is disabled by your
+organization's policy" and starts the session anyway, with no bridge. topic keeps
+passing `--remote-control`, so a topic picks it up if the policy ever changes, and
+treats that notice as the session being ready. Everything else works unchanged — up,
+down, handoff, fork, move, rename and the Dispatcher — minus the phone and claude.ai
+path. The Dispatcher then serves local sessions and SSH rather than your phone.
 
 ### Hand off — clearing context without losing the thread
 
