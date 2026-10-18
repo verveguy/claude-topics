@@ -336,6 +336,29 @@ under any profile whose Dispatcher agent is loaded. Each start appends
 `echo "[topic] daemon <name> exited with status $?"`, so an exit is visible in the pane:
 daemons have exited without logging why.
 
+### `topic ui` — browse topics side by side
+
+```bash
+topic ui
+```
+
+A topic list on the left, grouped by working directory, and the selected topic's tmux
+session on the right. Enter on a **down** topic picks it up first; an **adopted** topic is
+refused until you exit the original session. `Ctrl-r` refreshes the list.
+
+It runs on its own tmux server (`-L topics-ui`) with prefix `C-a`, so inside the right
+pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l` move between the panes,
+`C-a d` detaches (the UI keeps running; `topic ui` reattaches), and `C-a q` closes it, or
+`topic ui --quit` from another terminal. The topics themselves keep running. The mouse
+works. `topic ui --no-attach` builds the layout without attaching, which is what the tests
+use.
+
+Status is a coloured arrow beside each name: green ▲ up, red ▼ down, yellow ◆ adopted
+(running outside tmux). `NO_COLOR` turns the colours off.
+
+`fzf` is optional: with it you get type-to-filter and live reload; without it the left
+pane is a numbered menu. (`brew install fzf`.)
+
 ## Getting it
 
 ```bash
