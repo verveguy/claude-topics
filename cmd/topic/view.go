@@ -159,15 +159,7 @@ func cmdList(args []string) error {
 		return nil
 	}
 	for _, name := range names {
-		state := "down  "
-		switch {
-		case isUp(tag, name):
-			state = "UP    "
-		case scalar(load(filepath.Join(topicsRoot, slugify(name), "topic.json"))["state"]) == "adopted":
-			// An adopted topic runs outside tmux, so isUp cannot see it. Report that
-			// honestly rather than calling a live session "down".
-			state = "ADOPTED"
-		}
+		state := topicState(tag, topicsRoot, name)
 		fmt.Printf("  %-7s %s%s\n", state, name, argsMark(topicsRoot, name))
 	}
 	return nil

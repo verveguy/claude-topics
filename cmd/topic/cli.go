@@ -29,6 +29,14 @@ what makes hand-off possible.
   topic list [--all]          Show every topic and whether it is up or down.
                               --all crosses every profile on the machine.
   topic status "<name>"       Detail for one topic.
+  topic ui                    Browse topics: a list grouped by working directory on
+                              the left, the selected topic's tmux session on the
+                              right. Enter picks up a down topic. Own tmux server,
+                              prefix C-a; C-a h / C-a l switch panes, C-a d detaches.
+                              Uses fzf if installed, else a numbered menu.
+                              --no-attach builds the layout without attaching.
+                              C-a q (or topic ui --quit) closes the UI; topics keep
+                              running.
   topic set-args "<name>" -- <claude args...>  |  --clear
                               Replace (or clear) the extra claude arguments every
                               launch of this topic adds — up, handoff, fork, move,
@@ -207,6 +215,8 @@ func main() {
 		err = cmdWhoami([]string{p.configDir, p.topicsRoot})
 	case "profiles":
 		err = cmdProfiles([]string{p.configDir})
+	case "ui":
+		err = cmdUI(args, p)
 
 	// ---- documents and the sessions they seed -----------------------------------
 	case "handoff-path":
