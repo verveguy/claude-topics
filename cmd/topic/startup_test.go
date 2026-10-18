@@ -41,6 +41,17 @@ bpja@bretts liminis-framework %`
   Enter to confirm · Esc to cancel`
 
 	readyScreen = `  /remote-control is active · Continue here, on your phone, or at claude.ai/code`
+
+	// A Claude Enterprise account whose organization disables Remote Control, as
+	// captured from the Dispatcher on Claude Code v2.1.302, 2026-10-18. No banner ever
+	// appears, so this used to run out the 20s poll on every launch.
+	remoteControlDisabledScreen = ` ▐▛███▛█   Claude Code v2.1.302
+▝▜██████▀  Sonnet 5.5 with medium effort · Claude Enterprise
+ ▝▝   ▝▝   ~/.claude/dispatcher
+⏺ Remote Control is disabled by your organization's policy. Contact your
+  organization admin for access.
+─────────────────────────────────────────────────────────────────── Dispatcher ─
+❯ Try "create a util logging.py that..."`
 )
 
 func TestClassifyStartup(t *testing.T) {
@@ -58,6 +69,7 @@ func TestClassifyStartup(t *testing.T) {
 		{"lingering trust dialog after accepting", trustQuestion, true, startupWaiting},
 		{"dev channels confirmation", devChannelsQuestion, false, startupDevChannels},
 		{"ready", readyScreen, false, startupReady},
+		{"ready without remote control", remoteControlDisabledScreen, false, startupReady},
 		{"still loading", "bpja@bretts dev % CLAUDE_CONFIG_DIR=x claude --resume abc", false, startupWaiting},
 	}
 	for _, c := range cases {

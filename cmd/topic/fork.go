@@ -207,7 +207,7 @@ func cmdFork(args []string) error {
 		return err
 	}
 
-	fmt.Printf("%q is up. Remote Control name: %q\n", name, name)
+	fmt.Println(upMessage(configDir, name))
 	if parent != "" {
 		fmt.Println()
 		fmt.Printf("  %q still carries this thread in its own context. To shed it:\n", parent)

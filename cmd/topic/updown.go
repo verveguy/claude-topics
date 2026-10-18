@@ -251,7 +251,7 @@ func cmdUp(args []string) error {
 		"state", "up", "lastPickedUp", nowISO()}); err != nil {
 		return err
 	}
-	fmt.Printf("%q is up. Remote Control name: %q\n", name, name)
+	fmt.Println(upMessage(configDir, name))
 	return nil
 }
 
