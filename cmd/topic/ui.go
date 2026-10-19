@@ -68,10 +68,21 @@ func uiInstances() []string {
 		}
 		if tmuxCmd("-L", n, "has-session").Run() == nil {
 			names = append(names, n)
+		} else {
+			removeUISocket(n) // a closed instance's leftover socket file
 		}
 	}
 	sort.Strings(names)
 	return names
+}
+
+// removeUISocket deletes the socket file a closed instance leaves behind, so --list and
+// the socket directory stay clean. A socket whose server still answers is left alone.
+func removeUISocket(name string) {
+	if tmuxCmd("-L", name, "has-session").Run() == nil {
+		return
+	}
+	_ = os.Remove(filepath.Join(uiSocketDir(), name))
 }
 
 // uiID is the short name of an instance: what --list prints and --attach/--quit accept.
@@ -492,6 +503,7 @@ func cmdUI(args []string, p profile) error {
 			if err := tmuxCmd("-L", n, "kill-server").Run(); err != nil {
 				fmt.Printf("%s: not running\n", uiID(n))
 			}
+			removeUISocket(n)
 		}
 		return nil
 	case attach:
@@ -501,6 +513,7 @@ func cmdUI(args []string, p profile) error {
 		}
 		os.Setenv("TOPIC_UI_SOCKET", n)
 	case os.Getenv("TOPIC_UI_SOCKET") == "":
+		uiInstances() // sweeps the sockets of instances that have closed
 		os.Setenv("TOPIC_UI_SOCKET", newUIInstance())
 	}
 	return openUI(p, noAttach)
@@ -799,8 +812,12 @@ func chooseFzf(fzf string, rows []uiRow, collapsed map[string]bool, cursor int, 
 	for _, d := range dirs {
 		reload += " " + shellQuote("--collapse="+d)
 	}
-	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--reverse",
-		"--header=enter: open/fold  ^r: refresh",
+	// reverse-list puts the prompt at the bottom with the list still running top-down.
+	// ctrl-q closes this whole UI instance: its server goes, and the picker with it.
+	quit := "TOPIC_UI_SOCKET=" + shellQuote(uiSocket()) + " " + shellQuote(self) + " ui --quit"
+	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--layout=reverse-list",
+		"--header=enter: open/fold  ^r: refresh  ^q: quit",
+		"--bind=ctrl-q:execute-silent("+quit+")",
 		"--bind=ctrl-r:reload("+reload+")",
 		"--bind=double-click:accept",
 		// Land on the row we left; unbound at once so a later reload keeps its own cursor.
@@ -853,10 +870,16 @@ func chooseMenu(rows []uiRow) (uiRow, bool, error) {
 		}
 		fmt.Printf("%3d    %s  %s\n", i+1, r.mark(), r.label)
 	}
-	fmt.Print("\nnumber to open (a directory folds), Enter to refresh: ")
+	fmt.Print("\nnumber to open (a directory folds), q to quit, Enter to refresh: ")
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil { // the terminal closed; looping would spin
 		return uiRow{}, false, err
+	}
+	if strings.EqualFold(strings.TrimSpace(line), "q") {
+		// This picker dies with the server, so the leftover socket file is swept by the
+		// next --list or launch (uiInstances).
+		_ = uiTmux("kill-server").Run()
+		return uiRow{}, false, nil
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(line))
 	if err != nil || n < 1 || n > len(rows) {

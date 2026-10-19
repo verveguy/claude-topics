@@ -361,7 +361,10 @@ Every `topic ui` is its own instance on its own tmux server (`-L topics-ui-<id>`
 prefix `C-a`, so two terminal windows give two independent UIs, each with its own folded
 groups. Inside the right pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l`
 move between the panes, `C-a d` detaches (the instance keeps running), and `C-a q` closes
-that instance. The topics themselves keep running. The mouse works.
+that instance. So does `Ctrl-q` in the list (or `q` in the numbered menu), with no prompt:
+only the UI goes, and its leftover socket is swept on the next `--list` or launch. The
+topics themselves keep running. The mouse works. The filter prompt sits at the bottom of
+the list pane.
 
 - `topic ui --list` shows the running instances and whether a window is attached.
 - `topic ui --attach [ID]` reattaches to one (the ID may be left out when only one runs).
