@@ -270,13 +270,18 @@ func (r uiRow) line() string {
 	if r.state == "" { // a directory heading
 		// The heading's third field is the full directory: what enter and double-click
 		// hand back, so the picker knows which group to fold.
-		text := "▾ " + r.label
-		if r.hidden > 0 {
-			text = fmt.Sprintf("▸ %s (%d)", r.label, r.hidden)
-		}
-		return "\t" + colour(ansiDim, text) + "\t" + r.dir
+		return "\t" + colour(ansiDim, r.headingText()) + "\t" + r.dir
 	}
 	return r.state + "\t" + r.mark() + " " + r.label + "\t" + r.label
+}
+
+// headingText is a directory heading with its fold marker: ▾ open, ▸ folded with the
+// number of topics it hides.
+func (r uiRow) headingText() string {
+	if r.hidden > 0 {
+		return fmt.Sprintf("▸ %s (%d)", r.label, r.hidden)
+	}
+	return "▾ " + r.label
 }
 
 func currentRows(p profile, collapsed map[string]bool) []uiRow {
@@ -668,23 +673,22 @@ func chooseFzf(fzf string, rows []uiRow, collapsed map[string]bool, cursor int, 
 
 func chooseMenu(rows []uiRow) (uiRow, bool, error) {
 	fmt.Print("\033[H\033[2J")
-	var pickable []uiRow
-	for _, r := range rows {
+	// Headings are numbered too: picking one folds or unfolds its group, as in fzf.
+	for i, r := range rows {
 		if r.state == "" {
-			fmt.Println(colour(ansiDim, "── "+r.label))
+			fmt.Printf("%3d  %s\n", i+1, colour(ansiDim, r.headingText()))
 			continue
 		}
-		pickable = append(pickable, r)
-		fmt.Printf("%3d  %s  %s\n", len(pickable), r.mark(), r.label)
+		fmt.Printf("%3d    %s  %s\n", i+1, r.mark(), r.label)
 	}
-	fmt.Print("\nnumber to open, Enter to refresh: ")
+	fmt.Print("\nnumber to open (a directory folds), Enter to refresh: ")
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil { // the terminal closed; looping would spin
 		return uiRow{}, false, err
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(line))
-	if err != nil || n < 1 || n > len(pickable) {
+	if err != nil || n < 1 || n > len(rows) {
 		return uiRow{}, false, nil
 	}
-	return pickable[n-1], true, nil
+	return rows[n-1], true, nil
 }
