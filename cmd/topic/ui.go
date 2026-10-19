@@ -16,6 +16,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // uiSocket names the tmux server that holds the layout. TOPIC_UI_SOCKET overrides it
@@ -41,8 +43,114 @@ func uiTmux(args ...string) *exec.Cmd {
 
 // uiRow is one line of the picker: a topic, or a directory heading above its topics.
 type uiRow struct {
-	state string // "UP", "down", "ADOPTED"; empty for a heading
+	state string // "UP", "down", "ADOPTED", "SESSION" (a plain tmux session); empty for a heading
 	label string // the topic name, or the directory heading
+	dir   string // headings only: the full directory, which is what folding is keyed on
+	// hidden is the number of topics a collapsed heading is hiding; zero when expanded.
+	hidden int
+}
+
+// otherSessionsDir is the key (and heading) of the group holding tmux sessions that are
+// not topics.
+const otherSessionsDir = "other sessions"
+
+// extraSessionPatterns reads <topicsRoot>/ui-sessions: one tmux session name or glob per
+// line, '#' for comments. It lists what else the UI should show besides topics, such as a
+// daemon's session. A missing file means none.
+func extraSessionPatterns(topicsRoot string) []string {
+	data, err := os.ReadFile(filepath.Join(topicsRoot, "ui-sessions"))
+	if err != nil {
+		return nil
+	}
+	var pats []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+			pats = append(pats, l)
+		}
+	}
+	return pats
+}
+
+// addSessionPattern appends pattern to <topicsRoot>/ui-sessions. It reports false, and
+// leaves the file alone, when the pattern is already listed.
+func addSessionPattern(topicsRoot, pattern string) (bool, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return false, fmt.Errorf("ui: --add-session needs a session name or pattern")
+	}
+	if _, err := filepath.Match(pattern, ""); err != nil {
+		return false, fmt.Errorf("ui: bad pattern %q: %w", pattern, err)
+	}
+	for _, have := range extraSessionPatterns(topicsRoot) {
+		if have == pattern {
+			return false, nil
+		}
+	}
+	path := filepath.Join(topicsRoot, "ui-sessions")
+	existing, _ := os.ReadFile(path)
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		existing = append(existing, '\n')
+	}
+	if err := os.MkdirAll(topicsRoot, 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, append(existing, pattern+"\n"...), 0o644)
+}
+
+// removeSessionPattern deletes pattern's line from <topicsRoot>/ui-sessions, keeping
+// comments and the other patterns. It reports false when the pattern was not listed.
+func removeSessionPattern(topicsRoot, pattern string) (bool, error) {
+	pattern = strings.TrimSpace(pattern)
+	path := filepath.Join(topicsRoot, "ui-sessions")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, nil // no file: nothing listed
+	}
+	var kept []string
+	removed := false
+	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if strings.TrimSpace(l) == pattern && pattern != "" && !strings.HasPrefix(pattern, "#") {
+			removed = true
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if !removed {
+		return false, nil
+	}
+	out := ""
+	if len(kept) > 0 {
+		out = strings.Join(kept, "\n") + "\n"
+	}
+	return true, os.WriteFile(path, []byte(out), 0o644)
+}
+
+// matchSessions picks, from the live tmux session names, those a pattern names that are
+// not topics' own sessions, in name order.
+func matchSessions(live, patterns []string, isTopic func(string) bool) []string {
+	var out []string
+	for _, name := range live {
+		if isTopic(name) {
+			continue
+		}
+		for _, pat := range patterns {
+			if ok, _ := filepath.Match(pat, name); ok {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i]) < strings.ToLower(out[j]) })
+	return out
+}
+
+// liveTmuxSessions lists the session names on the default tmux server.
+func liveTmuxSessions() []string {
+	out, err := tmuxCmd("list-sessions", "-F", "#{session_name}").Output()
+	if err != nil {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(string(out)), "\n")
 }
 
 // topicState is how a topic is shown: running, put down, or adopted. An adopted topic
@@ -78,9 +186,10 @@ func shortDir(dir, home string, max int) string {
 }
 
 // buildRows groups the registry's topics by working directory: a heading per directory
-// (in path order), its topics beneath it (in name order). state is injected so the
-// grouping can be tested without tmux.
-func buildRows(topicsRoot, home string, maxDir int, state func(name string) string) []uiRow {
+// (in path order), its topics beneath it (in name order). A directory in collapsed keeps
+// its heading and loses its topics. state is injected so the grouping can be tested
+// without tmux. sessions are non-topic tmux sessions, shown last in a group of their own.
+func buildRows(topicsRoot, home string, maxDir int, collapsed map[string]bool, sessions []string, state func(name string) string) []uiRow {
 	groups := map[string][]string{}
 	for _, name := range topicNames(topicsRoot) {
 		dir := scalar(load(filepath.Join(topicsRoot, slugify(name), "topic.json"))["dir"])
@@ -94,11 +203,28 @@ func buildRows(topicsRoot, home string, maxDir int, state func(name string) stri
 
 	var rows []uiRow
 	for _, d := range dirs {
-		rows = append(rows, uiRow{label: shortDir(d, home, maxDir)})
 		names := groups[d]
+		heading := uiRow{label: shortDir(d, home, maxDir), dir: d}
+		if collapsed[d] {
+			heading.hidden = len(names)
+			rows = append(rows, heading)
+			continue
+		}
+		rows = append(rows, heading)
 		sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
 		for _, n := range names {
 			rows = append(rows, uiRow{state: state(n), label: n})
+		}
+	}
+	if len(sessions) > 0 {
+		heading := uiRow{label: otherSessionsDir, dir: otherSessionsDir}
+		if collapsed[otherSessionsDir] {
+			heading.hidden = len(sessions)
+			return append(rows, heading)
+		}
+		rows = append(rows, heading)
+		for _, n := range sessions {
+			rows = append(rows, uiRow{state: "SESSION", label: n})
 		}
 	}
 	return rows
@@ -134,21 +260,37 @@ func (r uiRow) mark() string {
 		return colour(ansiRed, "▼")
 	case "ADOPTED":
 		return colour(ansiYellow, "◆")
+	case "SESSION":
+		return colour(ansiGreen, "●")
 	}
 	return ""
 }
 
 func (r uiRow) line() string {
 	if r.state == "" { // a directory heading
-		return "\t" + colour(ansiDim, "── "+r.label) + "\t"
+		// The heading's third field is the full directory: what enter and double-click
+		// hand back, so the picker knows which group to fold.
+		text := "▾ " + r.label
+		if r.hidden > 0 {
+			text = fmt.Sprintf("▸ %s (%d)", r.label, r.hidden)
+		}
+		return "\t" + colour(ansiDim, text) + "\t" + r.dir
 	}
 	return r.state + "\t" + r.mark() + " " + r.label + "\t" + r.label
 }
 
-func currentRows(p profile) []uiRow {
+func currentRows(p profile, collapsed map[string]bool) []uiRow {
 	home, _ := os.UserHomeDir()
 	tag := profileTag(p.configDir)
-	return buildRows(p.topicsRoot, home, 28, func(name string) string {
+	isTopic := map[string]bool{}
+	for _, n := range topicNames(p.topicsRoot) {
+		isTopic[tmuxName(tag, n)] = true
+	}
+	var sessions []string
+	if pats := extraSessionPatterns(p.topicsRoot); len(pats) > 0 {
+		sessions = matchSessions(liveTmuxSessions(), pats, func(n string) bool { return isTopic[n] })
+	}
+	return buildRows(p.topicsRoot, home, 28, collapsed, sessions, func(name string) string {
 		return topicState(tag, p.topicsRoot, name)
 	})
 }
@@ -156,8 +298,44 @@ func currentRows(p profile) []uiRow {
 // cmdUI dispatches the three modes.
 func cmdUI(args []string, p profile) error {
 	var rows, pick, noAttach, quit bool
-	for _, a := range args {
+	collapsed := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if dir, ok := strings.CutPrefix(a, "--collapse="); ok {
+			collapsed[dir] = true
+			continue
+		}
 		switch a {
+		case "--remove-session":
+			if i+1 >= len(args) {
+				return fmt.Errorf("ui: --remove-session needs the session name or pattern as it was added, e.g. \"fabrik*\"")
+			}
+			pat := args[i+1]
+			removed, err := removeSessionPattern(p.topicsRoot, pat)
+			if err != nil {
+				return err
+			}
+			if removed {
+				fmt.Printf("removed %q\n", pat)
+			} else {
+				fmt.Printf("%q is not listed (see %s)\n", pat, filepath.Join(p.topicsRoot, "ui-sessions"))
+			}
+			return nil
+		case "--add-session":
+			if i+1 >= len(args) {
+				return fmt.Errorf("ui: --add-session needs a session name or pattern, e.g. \"fabrik*\"")
+			}
+			pat := args[i+1]
+			added, err := addSessionPattern(p.topicsRoot, pat)
+			if err != nil {
+				return err
+			}
+			if added {
+				fmt.Printf("added %q: matching tmux sessions show under %q in topic ui\n", pat, otherSessionsDir)
+			} else {
+				fmt.Printf("%q is already listed\n", pat)
+			}
+			return nil
 		case "--rows":
 			rows = true
 		case "--pick":
@@ -172,12 +350,12 @@ func cmdUI(args []string, p profile) error {
 	}
 	switch {
 	case rows:
-		for _, r := range currentRows(p) {
+		for _, r := range currentRows(p, collapsed) {
 			fmt.Println(r.line())
 		}
 		return nil
 	case pick:
-		return runPicker(p)
+		return runPicker(p, collapsed)
 	case quit:
 		// Only the UI's own server goes; the topics live on the default one and keep running.
 		if uiTmux("has-session", "-t", "="+uiSocket()).Run() != nil {
@@ -277,8 +455,80 @@ func withoutEnv(environ []string, name string) []string {
 	return out
 }
 
-// runPicker is the left pane: choose a topic, point the right pane at it, repeat.
-func runPicker(p profile) error {
+// binaryStamp identifies a version of the executable: a rebuild changes the mtime, and
+// usually the size.
+type binaryStamp struct {
+	mod  time.Time
+	size int64
+}
+
+func stampOf(path string) (binaryStamp, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return binaryStamp{}, false
+	}
+	return binaryStamp{fi.ModTime(), fi.Size()}, true
+}
+
+// watchBinary closes the returned channel once the file at path has changed and then held
+// still for one poll. Waiting for it to settle matters: `make build` rewrites the binary
+// and signs it in place, and exec'ing a half-written file would kill the picker.
+func watchBinary(path string, every time.Duration) <-chan struct{} {
+	changed := make(chan struct{})
+	start, ok := stampOf(path)
+	if !ok {
+		return changed // cannot watch what cannot be seen: never fires
+	}
+	go func() {
+		last := start
+		for {
+			time.Sleep(every)
+			now, ok := stampOf(path)
+			if !ok { // mid-replace: look again
+				continue
+			}
+			if now == last && now != start {
+				close(changed)
+				return
+			}
+			last = now
+		}
+	}()
+	return changed
+}
+
+// isDone reports whether ch has been closed, without blocking.
+func isDone(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// reexecPicker replaces this process with the (new) binary running the picker, carrying
+// the folded groups across so a rebuild does not unfold the list. It returns only if the
+// exec failed, and the picker then carries on with the old code.
+func reexecPicker(self string, collapsed map[string]bool) error {
+	args := []string{self, "ui", "--pick"}
+	var dirs []string
+	for d, folded := range collapsed {
+		if folded {
+			dirs = append(dirs, d)
+		}
+	}
+	sort.Strings(dirs)
+	for _, d := range dirs {
+		args = append(args, "--collapse="+d)
+	}
+	return replaceProcess(self, args)
+}
+
+// runPicker is the left pane: choose a topic, point the right pane at it, repeat. When
+// the topic binary is rebuilt underneath it, it re-executes itself, so a new build shows
+// up without closing the UI.
+func runPicker(p profile, collapsed map[string]bool) error {
 	// This pane lives inside the UI's own tmux server, so $TMUX points there; topic's
 	// own tmux calls must reach the default server, where the topic sessions are.
 	os.Unsetenv("TMUX")
@@ -287,14 +537,35 @@ func runPicker(p profile) error {
 		return err
 	}
 	tag := profileTag(p.configDir)
+	stale := watchBinary(self, time.Second)
+	cursor := 0 // the row to land on, so folding a group does not throw the cursor to the top
 	for {
-		row, ok, err := choose(currentRows(p), self)
+		if isDone(stale) {
+			if err := reexecPicker(self, collapsed); err != nil {
+				uiMessage("could not reload the topic UI: " + err.Error())
+				stale = make(chan struct{}) // do not retry on every pass
+			}
+		}
+		rows := currentRows(p, collapsed)
+		row, ok, err := choose(rows, collapsed, cursor, self, stale)
 		if err != nil {
 			return err
 		}
-		if !ok || row.state == "" { // nothing chosen, or a directory heading
+		if !ok {
+			cursor = 0
 			continue
 		}
+		if row.state == "" { // a directory heading: fold or unfold its group
+			collapsed[row.dir] = !collapsed[row.dir]
+			cursor = 0
+			for i, r := range rows {
+				if r.state == "" && r.dir == row.dir {
+					cursor = i
+				}
+			}
+			continue
+		}
+		cursor = 0
 		switch row.state {
 		case "ADOPTED":
 			uiMessage(fmt.Sprintf("%q is still running outside tmux: exit it, then topic up", row.label))
@@ -314,7 +585,11 @@ func runPicker(p profile) error {
 		}
 		right := strings.TrimSpace(string(out))
 		// =name is an exact match: a plain -t would take a prefix of another topic.
-		attach := "env -u TMUX tmux attach -t " + shellQuote("="+tmuxName(tag, row.label))
+		target := tmuxName(tag, row.label)
+		if row.state == "SESSION" { // not a topic: its tmux name is its label
+			target = row.label
+		}
+		attach := "env -u TMUX tmux attach -t " + shellQuote("="+target)
 		_ = uiTmux("respawn-pane", "-k", "-t", right, attach).Run()
 		_ = uiTmux("select-pane", "-t", right).Run()
 	}
@@ -322,24 +597,57 @@ func runPicker(p profile) error {
 
 // choose shows the rows and returns the one picked. fzf gives filtering and live
 // reload; without it a numbered menu does the job.
-func choose(rows []uiRow, self string) (uiRow, bool, error) {
+// stale closing means the binary changed: fzf is interrupted so the caller can reload.
+func choose(rows []uiRow, collapsed map[string]bool, cursor int, self string, stale <-chan struct{}) (uiRow, bool, error) {
 	if fzf, err := exec.LookPath("fzf"); err == nil {
-		return chooseFzf(fzf, rows, self)
+		return chooseFzf(fzf, rows, collapsed, cursor, self, stale)
 	}
 	return chooseMenu(rows)
 }
 
-func chooseFzf(fzf string, rows []uiRow, self string) (uiRow, bool, error) {
+func chooseFzf(fzf string, rows []uiRow, collapsed map[string]bool, cursor int, self string, stale <-chan struct{}) (uiRow, bool, error) {
 	var in strings.Builder
 	for _, r := range rows {
 		in.WriteString(r.line() + "\n")
 	}
+	// ctrl-r reloads in a child process, so the folded groups travel on its command line.
+	reload := shellQuote(self) + " ui --rows"
+	var dirs []string
+	for d, folded := range collapsed {
+		if folded {
+			dirs = append(dirs, d)
+		}
+	}
+	sort.Strings(dirs)
+	for _, d := range dirs {
+		reload += " " + shellQuote("--collapse="+d)
+	}
 	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--reverse",
-		"--header=enter: open  ^r: refresh",
-		"--bind=ctrl-r:reload("+shellQuote(self)+" ui --rows)")
+		"--header=enter: open/fold  ^r: refresh",
+		"--bind=ctrl-r:reload("+reload+")",
+		"--bind=double-click:accept",
+		// Land on the row we left; unbound at once so a later reload keeps its own cursor.
+		fmt.Sprintf("--bind=load:pos(%d)+unbind(load)", cursor+1))
 	cmd.Stdin = strings.NewReader(in.String())
 	cmd.Stderr = os.Stderr // fzf draws on /dev/tty; its stderr carries only errors
-	out, err := cmd.Output()
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := cmd.Start()
+	if err == nil {
+		// An interrupt makes fzf restore the terminal and exit 130, which reads as "nothing
+		// chosen"; the caller's loop then notices the new binary.
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-stale:
+				_ = cmd.Process.Signal(os.Interrupt)
+			case <-done:
+			}
+		}()
+		err = cmd.Wait()
+		close(done)
+	}
+	out := stdout.Bytes()
 	if err != nil {
 		// Exit 1 is no match, 130 is Esc or ctrl-c: both just mean "nothing chosen". Anything
 		// else (2: fzf could not run) would spin this loop forever, so surface it.
@@ -351,6 +659,9 @@ func chooseFzf(fzf string, rows []uiRow, self string) (uiRow, bool, error) {
 	f := strings.Split(strings.TrimRight(string(out), "\n"), "\t")
 	if len(f) != 3 {
 		return uiRow{}, false, nil
+	}
+	if f[0] == "" { // a heading hands back its directory
+		return uiRow{dir: f[2]}, true, nil
 	}
 	return uiRow{state: f[0], label: f[2]}, true, nil
 }

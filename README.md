@@ -364,6 +364,19 @@ pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l` move between the
 works. `topic ui --no-attach` builds the layout without attaching, which is what the tests
 use.
 
+Press Enter (or double-click) on a directory heading to fold or unfold its group.
+
+Other tmux sessions, such as a daemon's, can be listed too: `topic ui --add-session
+"fabrik*"` takes a session name or a glob (quote it so the shell leaves it alone) and
+records it in `<topics root>/ui-sessions`, one pattern per line. `topic ui --remove-session
+"fabrik*"` takes it back out. Matching sessions that are
+running show last, under `other sessions`, with a green ●; topics' own sessions are never
+repeated there.
+
+The picker re-executes itself when the `topic` binary is rebuilt, so a new build shows up
+without closing the UI. (Layout and key bindings are set when the UI is first created: those
+need `topic ui --quit` and a fresh `topic ui`.)
+
 Status is a coloured arrow beside each name: green ▲ up, red ▼ down, yellow ◆ adopted
 (running outside tmux). `NO_COLOR` turns the colours off.
 

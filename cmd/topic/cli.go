@@ -35,6 +35,9 @@ what makes hand-off possible.
                               prefix C-a; C-a h / C-a l switch panes, C-a d detaches.
                               Uses fzf if installed, else a numbered menu.
                               --no-attach builds the layout without attaching.
+                              --add-session "<name or glob>" also lists matching
+                              non-topic tmux sessions, e.g. "fabrik*".
+                              --remove-session "<name or glob>" takes one back out.
                               C-a q (or topic ui --quit) closes the UI; topics keep
                               running.
   topic set-args "<name>" -- <claude args...>  |  --clear

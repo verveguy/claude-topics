@@ -6,7 +6,129 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
+
+func TestWatchBinaryFiresOnceTheFileChangesAndSettles(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "topic")
+	if err := os.WriteFile(bin, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	changed := watchBinary(bin, 10*time.Millisecond)
+
+	time.Sleep(60 * time.Millisecond)
+	if isDone(changed) {
+		t.Fatal("fired with the binary untouched")
+	}
+	if err := os.WriteFile(bin, []byte("version two"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not fire after the binary was rewritten")
+	}
+}
+
+func TestMatchSessionsFiltersByPatternAndSkipsTopics(t *testing.T) {
+	live := []string{"zen", "fabrik", "fabrik daemon", "Dispatcher", "scratch"}
+	isTopic := func(n string) bool { return n == "zen" || n == "Dispatcher" }
+	got := matchSessions(live, []string{"fabrik*", "zen"}, isTopic)
+	want := []string{"fabrik", "fabrik daemon"} // zen matches a pattern but is a topic
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("sessions = %v, want %v", got, want)
+	}
+}
+
+func TestExtraSessionPatternsIgnoresCommentsAndBlanks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ui-sessions"), []byte("# daemons\nfabrik*\n\n  orac-daemon  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := extraSessionPatterns(root)
+	if want := []string{"fabrik*", "orac-daemon"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("patterns = %v, want %v", got, want)
+	}
+	if extraSessionPatterns(t.TempDir()) != nil {
+		t.Error("a missing file should mean no patterns")
+	}
+}
+
+func TestAddSessionPattern(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "topics") // not created yet
+	if added, err := addSessionPattern(root, " fabrik* "); err != nil || !added {
+		t.Fatalf("first add = %v, %v", added, err)
+	}
+	if added, err := addSessionPattern(root, "fabrik*"); err != nil || added {
+		t.Errorf("a repeat should be a no-op, got %v, %v", added, err)
+	}
+	// A file without a trailing newline must not have the next pattern glued onto it.
+	if err := os.WriteFile(filepath.Join(root, "ui-sessions"), []byte("fabrik*"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := addSessionPattern(root, "orac-daemon"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := extraSessionPatterns(root), []string{"fabrik*", "orac-daemon"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("patterns = %v, want %v", got, want)
+	}
+	if _, err := addSessionPattern(root, "[bad"); err == nil {
+		t.Error("a malformed glob should be refused")
+	}
+	if _, err := addSessionPattern(root, "  "); err == nil {
+		t.Error("an empty pattern should be refused")
+	}
+}
+
+func TestRemoveSessionPattern(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ui-sessions"), []byte("# daemons\nfabrik*\norac-daemon\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := removeSessionPattern(root, "fabrik*"); err != nil || !removed {
+		t.Fatalf("remove = %v, %v", removed, err)
+	}
+	if removed, _ := removeSessionPattern(root, "fabrik*"); removed {
+		t.Error("removing twice should report not listed")
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "ui-sessions"))
+	if want := "# daemons\norac-daemon\n"; string(data) != want {
+		t.Errorf("file = %q, want %q", data, want)
+	}
+	if removed, _ := removeSessionPattern(root, "# daemons"); removed {
+		t.Error("a comment is not a pattern")
+	}
+	if removed, _ := removeSessionPattern(t.TempDir(), "x"); removed {
+		t.Error("no file means nothing to remove")
+	}
+}
+
+func TestBuildRowsAppendsOtherSessionsLast(t *testing.T) {
+	root := seedRegistry(t, map[string]string{"a": "/home/me/x"})
+	down := func(string) string { return "down" }
+	got := buildRows(root, "/home/me", 40, nil, []string{"fabrik"}, down)
+	want := []uiRow{
+		{label: "~/x", dir: "/home/me/x"},
+		{state: "down", label: "a"},
+		{label: otherSessionsDir, dir: otherSessionsDir},
+		{state: "SESSION", label: "fabrik"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rows =\n%v\nwant\n%v", got, want)
+	}
+	got = buildRows(root, "/home/me", 40, map[string]bool{otherSessionsDir: true}, []string{"fabrik"}, down)
+	if last := got[len(got)-1]; last.hidden != 1 || last.dir != otherSessionsDir {
+		t.Errorf("collapsed heading = %+v", last)
+	}
+}
+
+func TestWatchBinaryMissingFileNeverFires(t *testing.T) {
+	changed := watchBinary(filepath.Join(t.TempDir(), "nope"), 10*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if isDone(changed) {
+		t.Fatal("fired for a file that does not exist")
+	}
+}
 
 func seedRegistry(t *testing.T, topics map[string]string) string {
 	t.Helper()
@@ -41,16 +163,16 @@ func TestBuildRowsGroupsByDirectory(t *testing.T) {
 		}
 		return "down"
 	}
-	got := buildRows(root, "/home/me", 40, state)
+	got := buildRows(root, "/home/me", 40, nil, nil, state)
 	want := []uiRow{
-		{label: "(no directory)"},
-		{"down", "Strayed"},
-		{label: "~/dev/ainative"},
-		{"down", "Kiln"},
-		{label: "~/dev/jetpack"},
-		{"down", "Alpha"},
-		{"UP", "orac"},
-		{"down", "zen"},
+		{label: "(no directory)", dir: ""},
+		{state: "down", label: "Strayed"},
+		{label: "~/dev/ainative", dir: "/home/me/dev/ainative"},
+		{state: "down", label: "Kiln"},
+		{label: "~/dev/jetpack", dir: "/home/me/dev/jetpack"},
+		{state: "down", label: "Alpha"},
+		{state: "UP", label: "orac"},
+		{state: "down", label: "zen"},
 	}
 	// "" sorts before any path, so the directory-less group leads.
 	if !reflect.DeepEqual(got, want) {
@@ -58,8 +180,22 @@ func TestBuildRowsGroupsByDirectory(t *testing.T) {
 	}
 }
 
+func TestBuildRowsCollapsedKeepsHeading(t *testing.T) {
+	root := seedRegistry(t, map[string]string{"a": "/home/me/x", "b": "/home/me/x", "c": "/home/me/y"})
+	down := func(string) string { return "down" }
+	got := buildRows(root, "/home/me", 40, map[string]bool{"/home/me/x": true}, nil, down)
+	want := []uiRow{
+		{label: "~/x", dir: "/home/me/x", hidden: 2},
+		{label: "~/y", dir: "/home/me/y"},
+		{state: "down", label: "c"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rows =\n%v\nwant\n%v", got, want)
+	}
+}
+
 func TestBuildRowsEmptyRegistry(t *testing.T) {
-	if rows := buildRows(t.TempDir(), "/home/me", 28, func(string) string { return "down" }); len(rows) != 0 {
+	if rows := buildRows(t.TempDir(), "/home/me", 28, nil, nil, func(string) string { return "down" }); len(rows) != 0 {
 		t.Errorf("expected no rows, got %v", rows)
 	}
 }
