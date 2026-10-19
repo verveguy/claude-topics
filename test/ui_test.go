@@ -21,13 +21,22 @@ func TestUIRowsGroupByDirectory(t *testing.T) {
 	e.seedTopic("kiln", map[string]any{"name": "Kiln", "dir": "/work/ainative"})
 
 	got := e.mustRun("ui", "--rows").stdout
-	want := "\t── /work/ainative\t\n" +
+	want := "\t▾ /work/ainative\t/work/ainative\n" +
 		"down\t▼ Kiln\tKiln\n" +
-		"\t── /work/jetpack\t\n" +
+		"\t▾ /work/jetpack\t/work/jetpack\n" +
 		"down\t▼ orac\torac\n" +
 		"down\t▼ zen\tzen\n"
 	if got != want {
 		t.Errorf("rows =\n%q\nwant\n%q", got, want)
+	}
+
+	// A collapsed directory keeps its heading, with a count, and loses its topics.
+	got = e.mustRun("ui", "--rows", "--collapse=/work/jetpack").stdout
+	want = "\t▾ /work/ainative\t/work/ainative\n" +
+		"down\t▼ Kiln\tKiln\n" +
+		"\t▸ /work/jetpack (2)\t/work/jetpack\n"
+	if got != want {
+		t.Errorf("collapsed rows =\n%q\nwant\n%q", got, want)
 	}
 }
 

@@ -92,3 +92,9 @@ func agentConfigDir(path string) string { return plistConfigDir(path) }
 func agentDisableCmd(path string) []string { return []string{"launchctl", "unload", path} }
 
 func agentEnableCmd(path string) []string { return []string{"launchctl", "load", "-w", path} }
+
+// replaceProcess swaps this process for path with args (args[0] is the program name). It
+// returns only if the exec failed, so the caller can carry on as it was.
+func replaceProcess(path string, args []string) error {
+	return syscall.Exec(path, args, os.Environ())
+}

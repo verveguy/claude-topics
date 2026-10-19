@@ -288,3 +288,21 @@ func agentDisableCmd(path string) []string {
 func agentEnableCmd(path string) []string {
 	return []string{"schtasks", "/Change", "/TN", agentTaskName(path), "/ENABLE"}
 }
+
+// replaceProcess has no exec on Windows: run path as a child on the same console, wait
+// for it, and exit with its status. It returns only if the child could not be started.
+func replaceProcess(path string, args []string) error {
+	cmd := exec.Command(path, args[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := cmd.Wait(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+		}
+		os.Exit(1)
+	}
+	os.Exit(0)
+	return nil
+}
