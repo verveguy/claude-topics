@@ -17,9 +17,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -33,7 +35,91 @@ func uiSocket() string {
 	if s := os.Getenv("TOPIC_UI_SOCKET"); s != "" {
 		return s
 	}
-	return "topics-ui"
+	return uiSocketPrefix
+}
+
+// Every plain `topic ui` is its own instance: a tmux server whose socket is
+// uiSocketPrefix-<id>. Two terminal windows are two UIs, each with its own folded groups.
+// TOPIC_UI_SOCKET pins one fixed name instead (tests use it, and so does the picker, which
+// inherits its instance from the environment of the server that runs it).
+const uiSocketPrefix = "topics-ui"
+
+// uiSocketDir is where tmux keeps its sockets: $TMUX_TMPDIR (or /tmp) / tmux-<uid>.
+func uiSocketDir() string {
+	dir := os.Getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()))
+}
+
+// uiInstances lists the running UI instances by socket name. A socket file whose server
+// is gone is skipped.
+func uiInstances() []string {
+	entries, err := os.ReadDir(uiSocketDir())
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		n := e.Name()
+		if n != uiSocketPrefix && !strings.HasPrefix(n, uiSocketPrefix+"-") {
+			continue
+		}
+		if tmuxCmd("-L", n, "has-session").Run() == nil {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// uiID is the short name of an instance: what --list prints and --attach/--quit accept.
+func uiID(socket string) string {
+	if socket == uiSocketPrefix { // an instance from before each launch got its own
+		return socket
+	}
+	return strings.TrimPrefix(socket, uiSocketPrefix+"-")
+}
+
+// newUIInstance picks an unused socket name for a new instance.
+func newUIInstance() string {
+	for {
+		var b [2]byte
+		_, _ = rand.Read(b[:])
+		name := fmt.Sprintf("%s-%x", uiSocketPrefix, b)
+		if tmuxCmd("-L", name, "has-session").Run() != nil {
+			return name
+		}
+	}
+}
+
+// resolveUIInstance finds the instance a command means. With an id it is that one; without
+// one it is the instance the environment pins, or the only one running.
+func resolveUIInstance(id string) (string, error) {
+	live := uiInstances()
+	if id != "" {
+		for _, n := range live {
+			if n == id || uiID(n) == id {
+				return n, nil
+			}
+		}
+		return "", fmt.Errorf("ui: no running instance %q (topic ui --list)", id)
+	}
+	if s := os.Getenv("TOPIC_UI_SOCKET"); s != "" {
+		return s, nil
+	}
+	switch len(live) {
+	case 0:
+		return "", fmt.Errorf("the topic UI is not running")
+	case 1:
+		return live[0], nil
+	}
+	ids := make([]string, len(live))
+	for i, n := range live {
+		ids[i] = uiID(n)
+	}
+	return "", fmt.Errorf("ui: %d instances are running (%s): name one, or use --all", len(live), strings.Join(ids, ", "))
 }
 
 // uiTmux runs tmux against the UI's own server.
@@ -302,7 +388,8 @@ func currentRows(p profile, collapsed map[string]bool) []uiRow {
 
 // cmdUI dispatches the three modes.
 func cmdUI(args []string, p profile) error {
-	var rows, pick, noAttach, quit bool
+	var rows, pick, noAttach, quit, attach, list, all bool
+	var instance string
 	collapsed := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -349,6 +436,14 @@ func cmdUI(args []string, p profile) error {
 			noAttach = true
 		case "--quit":
 			quit = true
+			instance = optionalValue(args, &i)
+		case "--attach":
+			attach = true
+			instance = optionalValue(args, &i)
+		case "--list":
+			list = true
+		case "--all":
+			all = true
 		default:
 			return fmt.Errorf("ui: unknown option %q (try: topic ui --help)", a)
 		}
@@ -361,15 +456,64 @@ func cmdUI(args []string, p profile) error {
 		return nil
 	case pick:
 		return runPicker(p, collapsed)
-	case quit:
-		// Only the UI's own server goes; the topics live on the default one and keep running.
-		if uiTmux("has-session", "-t", "="+uiSocket()).Run() != nil {
+	case list:
+		live := uiInstances()
+		if len(live) == 0 {
 			fmt.Println("the topic UI is not running")
-			return nil
 		}
-		return uiTmux("kill-server").Run()
+		for _, n := range live {
+			state := "detached"
+			if out, err := tmuxCmd("-L", n, "list-clients").Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+				state = "attached"
+			}
+			fmt.Printf("%s\t%s\n", uiID(n), state)
+		}
+		return nil
+	case quit:
+		// Only a UI's own server goes; the topics live on the default one and keep running.
+		targets := []string{}
+		if all {
+			targets = uiInstances()
+		} else {
+			n, err := resolveUIInstance(instance)
+			if err != nil {
+				if instance == "" && len(uiInstances()) == 0 {
+					fmt.Println(err)
+					return nil
+				}
+				return err
+			}
+			targets = append(targets, n)
+		}
+		if len(targets) == 0 {
+			fmt.Println("the topic UI is not running")
+		}
+		for _, n := range targets {
+			if err := tmuxCmd("-L", n, "kill-server").Run(); err != nil {
+				fmt.Printf("%s: not running\n", uiID(n))
+			}
+		}
+		return nil
+	case attach:
+		n, err := resolveUIInstance(instance)
+		if err != nil {
+			return err
+		}
+		os.Setenv("TOPIC_UI_SOCKET", n)
+	case os.Getenv("TOPIC_UI_SOCKET") == "":
+		os.Setenv("TOPIC_UI_SOCKET", newUIInstance())
 	}
 	return openUI(p, noAttach)
+}
+
+// optionalValue returns the argument after args[*i] when it is not itself an option, and
+// steps *i past it.
+func optionalValue(args []string, i *int) string {
+	if *i+1 < len(args) && !strings.HasPrefix(args[*i+1], "-") {
+		*i++
+		return args[*i]
+	}
+	return ""
 }
 
 // openUI builds the layout if it is not already up, then attaches to it.
@@ -418,8 +562,13 @@ func openUI(p profile, noAttach bool) error {
 		if err := uiTmux("set", "-g", "@right-pane", strings.TrimSpace(string(out))).Run(); err != nil {
 			return err
 		}
+		if err := uiTmux("set", "-g", "@left-pane", left).Run(); err != nil {
+			return err
+		}
 		_ = uiTmux("select-layout", "main-vertical").Run()
 		_ = uiTmux("select-pane", "-t", left).Run()
+	} else {
+		revivePicker()
 	}
 	if noAttach {
 		return nil
@@ -428,6 +577,20 @@ func openUI(p profile, noAttach bool) error {
 	cmd.Env = withoutEnv(os.Environ(), "TMUX") // else tmux refuses to nest
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
+}
+
+// revivePicker restarts the left pane's picker if it has exited. remain-on-exit keeps a
+// dead pane on screen ("Pane is dead"), and reattaching to it would show that corpse for
+// good.
+func revivePicker() {
+	out, err := uiTmux("show", "-gv", "@left-pane").Output()
+	if err != nil {
+		return // a UI built before the left pane was recorded
+	}
+	left := strings.TrimSpace(string(out))
+	if dead, err := uiTmux("display-message", "-p", "-t", left, "#{pane_dead}").Output(); err == nil && strings.TrimSpace(string(dead)) == "1" {
+		_ = uiTmux("respawn-pane", "-k", "-t", left).Run()
+	}
 }
 
 // uiMessage flashes text in the UI's status line. display-message expands tmux formats
@@ -537,6 +700,15 @@ func runPicker(p profile, collapsed map[string]bool) error {
 	// This pane lives inside the UI's own tmux server, so $TMUX points there; topic's
 	// own tmux calls must reach the default server, where the topic sessions are.
 	os.Unsetenv("TMUX")
+	// A stray Ctrl-C in this pane (or one meant for fzf) must not kill the picker and leave
+	// "Pane is dead" behind. Notify, unlike Ignore, is reset in the fzf child, so fzf still
+	// answers it.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		for range sigs {
+		}
+	}()
 	self, err := os.Executable()
 	if err != nil {
 		return err
