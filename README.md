@@ -375,7 +375,10 @@ the list pane.
 
 Listing finds instances through tmux's socket directory, so it is not available on Windows.
 
-Press Enter (or double-click) on a directory heading to fold or unfold its group.
+Press Enter (or double-click) on a directory heading to fold or unfold its group. The list
+updates in place: fzf keeps running while you fold, open a topic, or refresh, so the left pane
+does not blank and redraw. Folds are kept on the instance's tmux server, so they survive a
+hot reload of the picker.
 
 Other tmux sessions, such as a daemon's, can be listed too: `topic ui --add-session
 "fabrik*"` takes a session name or a glob (quote it so the shell leaves it alone) and

@@ -16,7 +16,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -420,6 +419,7 @@ func currentRows(p profile, collapsed map[string]bool) []uiRow {
 func cmdUI(args []string, p profile) error {
 	var rows, pick, noAttach, quit, attach, list, all bool
 	var instance string
+	var activate []string // --activate STATE THIRD-FIELD INDEX: what fzf hands back on a choice
 	collapsed := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -458,6 +458,12 @@ func cmdUI(args []string, p profile) error {
 				fmt.Printf("%q is already listed\n", pat)
 			}
 			return nil
+		case "--activate":
+			if i+3 >= len(args) {
+				return fmt.Errorf("ui: --activate needs STATE, LABEL-OR-DIR and INDEX")
+			}
+			activate = args[i+1 : i+4]
+			i += 3
 		case "--rows":
 			rows = true
 		case "--pick":
@@ -479,13 +485,21 @@ func cmdUI(args []string, p profile) error {
 		}
 	}
 	switch {
+	case activate != nil:
+		idx, _ := strconv.Atoi(activate[2])
+		fmt.Println(activateChoice(p, activate[0], activate[1], idx))
+		return nil
 	case rows:
+		// Folds live on the instance's server; --collapse adds to them for a one-off listing.
+		for d := range uiCollapsed() {
+			collapsed[d] = true
+		}
 		for _, r := range currentRows(p, collapsed) {
 			fmt.Println(r.line())
 		}
 		return nil
 	case pick:
-		return runPicker(p, collapsed)
+		return runPicker(p)
 	case list:
 		live := uiInstances()
 		if len(live) == 0 {
@@ -707,31 +721,107 @@ func isDone(ch <-chan struct{}) bool {
 	}
 }
 
-// reexecPicker replaces this process with the (new) binary running the picker, carrying
-// the folded groups across so a rebuild does not unfold the list. It returns only if the
-// exec failed, and the picker then carries on with the old code.
-func reexecPicker(self string, collapsed map[string]bool) error {
-	args := []string{self, "ui", "--pick"}
-	var dirs []string
-	for d, folded := range collapsed {
-		if folded {
-			dirs = append(dirs, d)
+// uiCollapsed is the set of folded directories. It lives on the instance's tmux server (the
+// @collapsed option, one directory per line), so fzf's helper commands, a hot-reloaded
+// picker and the next refresh all see the same folds without passing them around.
+func uiCollapsed() map[string]bool {
+	out, err := uiTmux("show", "-gv", "@collapsed").Output()
+	folded := map[string]bool{}
+	if err != nil {
+		return folded
+	}
+	for _, d := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if d != "" {
+			folded[d] = true
 		}
 	}
-	sort.Strings(dirs)
-	for _, d := range dirs {
-		args = append(args, "--collapse="+d)
-	}
-	return replaceProcess(self, args)
+	return folded
 }
 
-// runPicker is the left pane: choose a topic, point the right pane at it, repeat. When
-// the topic binary is rebuilt underneath it, it re-executes itself, so a new build shows
-// up without closing the UI.
-func runPicker(p profile, collapsed map[string]bool) error {
+func toggleCollapsed(dir string) {
+	folded := uiCollapsed()
+	if folded[dir] {
+		delete(folded, dir)
+	} else {
+		folded[dir] = true
+	}
+	dirs := make([]string, 0, len(folded))
+	for d := range folded {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	_ = uiTmux("set", "-g", "@collapsed", strings.Join(dirs, "\n")).Run()
+}
+
+// activateChoice is what Enter or a double-click runs, inside fzf's transform: it acts on
+// the row (fold a heading, or open a topic) and prints the fzf action that refreshes the
+// list in place. fzf never exits, so the left pane is not torn down and redrawn per choice.
+// third is the topic's name, or a heading's directory; index is the row's position.
+func activateChoice(p profile, state, third string, index int) string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	reload := "reload-sync(" + shellQuote(self) + " ui --rows)"
+	if state == "" { // a directory heading
+		toggleCollapsed(third)
+		// The heading keeps its position when its group folds. clear-query shows every row
+		// again, so the position means what it says.
+		return fmt.Sprintf("%s+clear-query+pos(%d)", reload, index+1)
+	}
+	openRow(p, self, state, third)
+	return reload // an arrow may have turned from down to up
+}
+
+// openRow points the right pane at a topic or session, picking a down topic up first.
+func openRow(p profile, self, state, label string) {
+	tag := profileTag(p.configDir)
+	switch state {
+	case "ADOPTED":
+		uiMessage(fmt.Sprintf("%q is still running outside tmux: exit it, then topic up", label))
+		return
+	case "down":
+		uiMessage(fmt.Sprintf("picking up %q...", label))
+		if out, err := exec.Command(self, "up", label).CombinedOutput(); err != nil {
+			// Attaching to a session that never started would leave the right pane
+			// dead with a bare tmux error; say why instead.
+			uiMessage(fmt.Sprintf("could not pick up %q: %s", label, lastLine(string(out), err)))
+			return
+		}
+	}
+	out, err := uiTmux("show", "-gv", "@right-pane").Output()
+	if err != nil {
+		uiMessage("the layout has no right pane: " + err.Error())
+		return
+	}
+	right := strings.TrimSpace(string(out))
+	// =name is an exact match: a plain -t would take a prefix of another topic.
+	target := tmuxName(tag, label)
+	if state == "SESSION" { // not a topic: its tmux name is its label
+		target = label
+	}
+	attach := "env -u TMUX tmux attach -t " + shellQuote("="+target)
+	_ = uiTmux("respawn-pane", "-k", "-t", right, attach).Run()
+	_ = uiTmux("select-pane", "-t", right).Run()
+}
+
+// reexecPicker replaces this process with the (new) binary running the picker. The folds
+// live on the tmux server, so they survive without being passed along. It returns only if
+// the exec failed, and the picker then carries on with the old code.
+func reexecPicker(self string) error {
+	return replaceProcess(self, []string{self, "ui", "--pick"})
+}
+
+// runPicker is the left pane. With fzf it starts one fzf and leaves it running: choices are
+// handled by `topic ui --activate`, which fzf runs itself. Without fzf it is a loop around a
+// numbered menu. When the topic binary is rebuilt underneath it, it re-executes itself, so a
+// new build shows up without closing the UI.
+func runPicker(p profile) error {
 	// This pane lives inside the UI's own tmux server, so $TMUX points there; topic's
 	// own tmux calls must reach the default server, where the topic sessions are.
 	os.Unsetenv("TMUX")
+	// fzf's helper commands inherit this, and must reach this instance's server.
+	os.Setenv("TOPIC_UI_SOCKET", uiSocket())
 	// A stray Ctrl-C in this pane (or one meant for fzf) must not kill the picker and leave
 	// "Pane is dead" behind. Notify, unlike Ignore, is reset in the fzf child, so fzf still
 	// answers it.
@@ -745,138 +835,81 @@ func runPicker(p profile, collapsed map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	tag := profileTag(p.configDir)
 	stale := watchBinary(self, time.Second)
-	cursor := 0 // the row to land on, so folding a group does not throw the cursor to the top
+	fzf, _ := exec.LookPath("fzf")
 	for {
 		if isDone(stale) {
-			if err := reexecPicker(self, collapsed); err != nil {
+			if err := reexecPicker(self); err != nil {
 				uiMessage("could not reload the topic UI: " + err.Error())
 				stale = make(chan struct{}) // do not retry on every pass
 			}
 		}
-		rows := currentRows(p, collapsed)
-		row, ok, err := choose(rows, collapsed, cursor, self, stale)
+		rows := currentRows(p, uiCollapsed())
+		if fzf != "" {
+			if err := runFzf(fzf, rows, self, stale); err != nil {
+				return err
+			}
+			continue // fzf ended on ctrl-c or a new binary: start it again (or re-exec)
+		}
+		row, ok, err := chooseMenu(rows)
 		if err != nil {
 			return err
 		}
-		if !ok {
-			cursor = 0
-			continue
+		switch {
+		case !ok:
+		case row.state == "":
+			toggleCollapsed(row.dir)
+		default:
+			openRow(p, self, row.state, row.label)
 		}
-		if row.state == "" { // a directory heading: fold or unfold its group
-			collapsed[row.dir] = !collapsed[row.dir]
-			cursor = 0
-			for i, r := range rows {
-				if r.state == "" && r.dir == row.dir {
-					cursor = i
-				}
-			}
-			continue
-		}
-		cursor = 0
-		switch row.state {
-		case "ADOPTED":
-			uiMessage(fmt.Sprintf("%q is still running outside tmux: exit it, then topic up", row.label))
-			continue
-		case "down":
-			uiMessage(fmt.Sprintf("picking up %q...", row.label))
-			if out, err := exec.Command(self, "up", row.label).CombinedOutput(); err != nil {
-				// Attaching to a session that never started would leave the right pane
-				// dead with a bare tmux error; say why instead.
-				uiMessage(fmt.Sprintf("could not pick up %q: %s", row.label, lastLine(string(out), err)))
-				continue
-			}
-		}
-		out, err := uiTmux("show", "-gv", "@right-pane").Output()
-		if err != nil {
-			return fmt.Errorf("ui: the layout has no right pane: %w", err)
-		}
-		right := strings.TrimSpace(string(out))
-		// =name is an exact match: a plain -t would take a prefix of another topic.
-		target := tmuxName(tag, row.label)
-		if row.state == "SESSION" { // not a topic: its tmux name is its label
-			target = row.label
-		}
-		attach := "env -u TMUX tmux attach -t " + shellQuote("="+target)
-		_ = uiTmux("respawn-pane", "-k", "-t", right, attach).Run()
-		_ = uiTmux("select-pane", "-t", right).Run()
 	}
 }
 
-// choose shows the rows and returns the one picked. fzf gives filtering and live
-// reload; without it a numbered menu does the job.
-// stale closing means the binary changed: fzf is interrupted so the caller can reload.
-func choose(rows []uiRow, collapsed map[string]bool, cursor int, self string, stale <-chan struct{}) (uiRow, bool, error) {
-	if fzf, err := exec.LookPath("fzf"); err == nil {
-		return chooseFzf(fzf, rows, collapsed, cursor, self, stale)
-	}
-	return chooseMenu(rows)
-}
-
-func chooseFzf(fzf string, rows []uiRow, collapsed map[string]bool, cursor int, self string, stale <-chan struct{}) (uiRow, bool, error) {
+// runFzf shows the rows and blocks until fzf exits, which is on ctrl-c or when stale closes
+// (the binary changed). Choices do not end it: Enter and double-click run
+// `topic ui --activate`, whose output is an fzf action that reloads the list in place.
+func runFzf(fzf string, rows []uiRow, self string, stale <-chan struct{}) error {
 	var in strings.Builder
 	for _, r := range rows {
 		in.WriteString(r.line() + "\n")
 	}
-	// ctrl-r reloads in a child process, so the folded groups travel on its command line.
-	reload := shellQuote(self) + " ui --rows"
-	var dirs []string
-	for d, folded := range collapsed {
-		if folded {
-			dirs = append(dirs, d)
-		}
-	}
-	sort.Strings(dirs)
-	for _, d := range dirs {
-		reload += " " + shellQuote("--collapse="+d)
-	}
+	// {1} is the state (empty for a heading), {3} the topic or directory, {n} the row index.
+	activate := "transform(" + shellQuote(self) + " ui --activate {1} {3} {n})"
 	// reverse-list puts the prompt at the bottom with the list still running top-down.
 	// ctrl-q closes this whole UI instance: its server goes, and the picker with it.
-	quit := "TOPIC_UI_SOCKET=" + shellQuote(uiSocket()) + " " + shellQuote(self) + " ui --quit"
 	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--layout=reverse-list",
 		"--header=enter: open/fold  ^r: refresh  ^q: quit",
-		"--bind=ctrl-q:execute-silent("+quit+")",
-		"--bind=ctrl-r:reload("+reload+")",
-		"--bind=double-click:accept",
-		// Land on the row we left; unbound at once so a later reload keeps its own cursor.
-		fmt.Sprintf("--bind=load:pos(%d)+unbind(load)", cursor+1))
+		"--bind=enter:"+activate,
+		"--bind=double-click:"+activate,
+		"--bind=esc:clear-query", // not "quit": that would end fzf and redraw the pane
+		"--bind=ctrl-q:execute-silent("+shellQuote(self)+" ui --quit)",
+		"--bind=ctrl-r:reload("+shellQuote(self)+" ui --rows)")
 	cmd.Stdin = strings.NewReader(in.String())
 	cmd.Stderr = os.Stderr // fzf draws on /dev/tty; its stderr carries only errors
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	err := cmd.Start()
-	if err == nil {
-		// An interrupt makes fzf restore the terminal and exit 130, which reads as "nothing
-		// chosen"; the caller's loop then notices the new binary.
-		done := make(chan struct{})
-		go func() {
-			select {
-			case <-stale:
-				_ = cmd.Process.Signal(os.Interrupt)
-			case <-done:
-			}
-		}()
-		err = cmd.Wait()
-		close(done)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ui: fzf: %w", err)
 	}
-	out := stdout.Bytes()
-	if err != nil {
-		// Exit 1 is no match, 130 is Esc or ctrl-c: both just mean "nothing chosen". Anything
-		// else (2: fzf could not run) would spin this loop forever, so surface it.
-		if ee, isExit := err.(*exec.ExitError); isExit && ee.ExitCode() != 2 {
-			return uiRow{}, false, nil
+	// An interrupt makes fzf restore the terminal and exit 130; the caller's loop then
+	// notices the new binary.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-stale:
+			_ = cmd.Process.Signal(os.Interrupt)
+		case <-done:
 		}
-		return uiRow{}, false, fmt.Errorf("ui: fzf: %w", err)
+	}()
+	err := cmd.Wait()
+	close(done)
+	// Exit 1 is no match and 130 is ctrl-c: both just mean fzf is done. Anything else
+	// (2: fzf could not run) would spin the caller's loop forever, so surface it.
+	if ee, isExit := err.(*exec.ExitError); isExit && ee.ExitCode() != 2 {
+		return nil
 	}
-	f := strings.Split(strings.TrimRight(string(out), "\n"), "\t")
-	if len(f) != 3 {
-		return uiRow{}, false, nil
+	if err != nil {
+		return fmt.Errorf("ui: fzf: %w", err)
 	}
-	if f[0] == "" { // a heading hands back its directory
-		return uiRow{dir: f[2]}, true, nil
-	}
-	return uiRow{state: f[0], label: f[2]}, true, nil
+	return nil
 }
 
 func chooseMenu(rows []uiRow) (uiRow, bool, error) {
