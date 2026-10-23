@@ -18,7 +18,9 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -76,13 +79,29 @@ func uiInstances() []string {
 	return names
 }
 
+// uiSocketGrace is how old a socket file must be before it can be called abandoned. A new
+// instance's tmux server creates its socket before it has a session, and a failed
+// has-session in that window must not unlink a live server's only way in.
+const uiSocketGrace = 3 * time.Second
+
 // removeUISocket deletes the socket file a closed instance leaves behind, so --list and
-// the socket directory stay clean. A socket whose server still answers is left alone.
+// the socket directory stay clean. It only does so when the file is past uiSocketGrace
+// and nothing is listening: connecting is refused. Anything else (a server that answers,
+// one still starting, an unexpected error) is left alone.
 func removeUISocket(name string) {
-	if tmuxCmd("-L", name, "has-session").Run() == nil {
+	path := filepath.Join(uiSocketDir(), name)
+	fi, err := os.Lstat(path)
+	if err != nil || time.Since(fi.ModTime()) < uiSocketGrace {
 		return
 	}
-	_ = os.Remove(filepath.Join(uiSocketDir(), name))
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err == nil {
+		conn.Close() // a live server
+		return
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		_ = os.Remove(path)
+	}
 }
 
 // uiID is the short name of an instance: what --list prints and --attach/--quit accept.
