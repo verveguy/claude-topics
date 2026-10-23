@@ -162,3 +162,52 @@ func TestUIInstancesAreSeparate(t *testing.T) {
 		t.Errorf("after --quit --all: %q", out)
 	}
 }
+
+// Enter on a heading runs `topic ui --activate`, which folds the group in the instance's own
+// state and prints the fzf action that redraws the list in place. fzf is never restarted for
+// a choice, so the fold has to live where every helper and a hot-reloaded picker can see it:
+// the instance's tmux server.
+func TestUIActivateFoldsAHeadingInPlace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("instances are found through tmux's socket directory")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	tmp, err := os.MkdirTemp("/tmp", "tui") // short: unix socket paths are capped near 104 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMUX_TMPDIR", tmp)
+	t.Setenv("TMUX", "")
+	t.Setenv("TOPIC_UI_SOCKET", "")
+	t.Setenv("NO_COLOR", "1")
+	e := newEnv(t)
+	e.seedTopic("zen", map[string]any{"name": "zen", "dir": "/work/jetpack"})
+	e.seedTopic("orac", map[string]any{"name": "orac", "dir": "/work/jetpack"})
+	e.seedTopic("kiln", map[string]any{"name": "Kiln", "dir": "/work/ainative"})
+	t.Cleanup(func() { e.run("ui", "--quit", "--all") })
+
+	e.mustRun("ui", "--no-attach")
+	id := strings.Fields(e.mustRun("ui", "--list").stdout)[0]
+	t.Setenv("TOPIC_UI_SOCKET", "topics-ui-"+id) // what the picker and fzf's helpers inherit
+
+	// The second heading (row index 2, zero-based) is /work/jetpack.
+	action := strings.TrimSpace(e.mustRun("ui", "--activate", "", "/work/jetpack", "2").stdout)
+	if !strings.HasPrefix(action, "reload-sync(") || !strings.HasSuffix(action, "+clear-query+pos(3)") {
+		t.Errorf("action = %q, want a reload-sync that ends +clear-query+pos(3)", action)
+	}
+	want := "\t▾ /work/ainative\t/work/ainative\n" +
+		"down\t▼ Kiln\tKiln\n" +
+		"\t▸ /work/jetpack (2)\t/work/jetpack\n"
+	if got := e.mustRun("ui", "--rows").stdout; got != want {
+		t.Errorf("after folding, rows =\n%q\nwant\n%q", got, want)
+	}
+
+	// The same choice again unfolds it.
+	e.mustRun("ui", "--activate", "", "/work/jetpack", "2")
+	if got := e.mustRun("ui", "--rows").stdout; strings.Contains(got, "▸") || !strings.Contains(got, "orac") {
+		t.Errorf("after unfolding, rows =\n%q", got)
+	}
+}
