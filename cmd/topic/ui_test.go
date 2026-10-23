@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -119,6 +121,66 @@ func TestBuildRowsAppendsOtherSessionsLast(t *testing.T) {
 	got = buildRows(root, "/home/me", 40, map[string]bool{otherSessionsDir: true}, []string{"fabrik"}, down)
 	if last := got[len(got)-1]; last.hidden != 1 || last.dir != otherSessionsDir {
 		t.Errorf("collapsed heading = %+v", last)
+	}
+}
+
+// The sweep must never unlink a live server's socket, nor one that is still starting: only
+// a file that is past the grace period and refuses connections is abandoned.
+func TestRemoveUISocketOnlyRemovesAbandonedSockets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("tmux sockets live under a unix uid directory")
+	}
+	tmp, err := os.MkdirTemp("/tmp", "tus") // short: unix socket paths are capped near 104 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMUX_TMPDIR", tmp)
+	if err := os.MkdirAll(uiSocketDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listen := func(name string) net.Listener {
+		l, err := net.Listen("unix", filepath.Join(uiSocketDir(), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	age := func(name string) {
+		old := time.Now().Add(-time.Minute)
+		if err := os.Chtimes(filepath.Join(uiSocketDir(), name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exists := func(name string) bool {
+		_, err := os.Lstat(filepath.Join(uiSocketDir(), name))
+		return err == nil
+	}
+
+	live := listen("topics-ui-live")
+	defer live.Close()
+	age("topics-ui-live")
+
+	fresh := listen("topics-ui-fresh") // nothing listens once closed, but it is brand new
+	fresh.(*net.UnixListener).SetUnlinkOnClose(false)
+	fresh.Close()
+
+	dead := listen("topics-ui-dead")
+	dead.(*net.UnixListener).SetUnlinkOnClose(false)
+	dead.Close()
+	age("topics-ui-dead")
+
+	for _, n := range []string{"topics-ui-live", "topics-ui-fresh", "topics-ui-dead"} {
+		removeUISocket(n)
+	}
+	if !exists("topics-ui-live") {
+		t.Error("removed the socket of a server that is answering")
+	}
+	if !exists("topics-ui-fresh") {
+		t.Error("removed a socket inside the grace period: a starting server would be orphaned")
+	}
+	if exists("topics-ui-dead") {
+		t.Error("kept an old socket that refuses connections")
 	}
 }
 

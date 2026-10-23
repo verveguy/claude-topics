@@ -357,12 +357,23 @@ A topic list on the left, grouped by working directory, and the selected topic's
 session on the right. Enter on a **down** topic picks it up first; an **adopted** topic is
 refused until you exit the original session. `Ctrl-r` refreshes the list.
 
-It runs on its own tmux server (`-L topics-ui`) with prefix `C-a`, so inside the right
-pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l` move between the panes,
-`C-a d` detaches (the UI keeps running; `topic ui` reattaches), and `C-a q` closes it, or
-`topic ui --quit` from another terminal. The topics themselves keep running. The mouse
-works. `topic ui --no-attach` builds the layout without attaching, which is what the tests
-use.
+Every `topic ui` is its own instance on its own tmux server (`-L topics-ui-<id>`) with
+prefix `C-a`, so two terminal windows give two independent UIs, each with its own folded
+groups. Inside the right pane `C-b` still drives the topic's own tmux. `C-a h` / `C-a l`
+move between the panes, `C-a d` detaches (the instance keeps running), and `C-a q` closes
+that instance. So does `Ctrl-q` in the list (or `q` in the numbered menu), with no prompt:
+only the UI goes, and its leftover socket is swept on the next `--list` or launch. The
+topics themselves keep running. The mouse works. The filter prompt sits at the bottom of
+the list pane.
+
+- `topic ui --list` shows the running instances and whether a window is attached.
+- `topic ui --attach [ID]` reattaches to one (the ID may be left out when only one runs).
+  If its picker had exited, it is restarted rather than left as "Pane is dead".
+- `topic ui --quit [ID]` closes one, and `topic ui --quit --all` closes every instance.
+- `TOPIC_UI_SOCKET=<name>` pins one fixed instance instead of making a new one per launch.
+- `topic ui --no-attach` builds the layout without attaching, which is what the tests use.
+
+Listing finds instances through tmux's socket directory, so it is not available on Windows.
 
 Press Enter (or double-click) on a directory heading to fold or unfold its group.
 
@@ -375,7 +386,7 @@ repeated there.
 
 The picker re-executes itself when the `topic` binary is rebuilt, so a new build shows up
 without closing the UI. (Layout and key bindings are set when the UI is first created: those
-need `topic ui --quit` and a fresh `topic ui`.)
+need that instance closed and a fresh `topic ui`.)
 
 Status is a coloured arrow beside each name: green ▲ up, red ▼ down, yellow ◆ adopted
 (running outside tmux). `NO_COLOR` turns the colours off.

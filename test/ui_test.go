@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,5 +112,53 @@ func TestUILayoutSurvivesBaseIndexOne(t *testing.T) {
 	e.mustRun("ui", "--quit")
 	if err := tmuxCommand("-L", sock, "has-session").Run(); err == nil {
 		t.Error("the UI is still running after --quit")
+	}
+}
+
+// Each plain `topic ui` is its own instance, so two terminal windows do not share one UI
+// (and its folded groups). --list names them, --quit needs an id when there are several,
+// and --quit --all closes every one. Runs on a private TMUX_TMPDIR, so the developer's own
+// UI is neither listed nor touched.
+func TestUIInstancesAreSeparate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("instances are found through tmux's socket directory")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	// Short on purpose: a unix socket path is capped near 104 bytes, and t.TempDir() is not.
+	tmp, err := os.MkdirTemp("/tmp", "tui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("TMUX_TMPDIR", tmp)
+	t.Setenv("TMUX", "")
+	t.Setenv("TOPIC_UI_SOCKET", "")
+	e := newEnv(t)
+	t.Cleanup(func() { e.run("ui", "--quit", "--all") })
+
+	e.mustRun("ui", "--no-attach")
+	e.mustRun("ui", "--no-attach")
+	ids := strings.Fields(e.mustRun("ui", "--list").stdout)
+	// each line is "<id>\tdetached"
+	var names []string
+	for i := 0; i+1 < len(ids); i += 2 {
+		names = append(names, ids[i])
+	}
+	if len(names) != 2 || names[0] == names[1] {
+		t.Fatalf("want two distinct instances, got %q", ids)
+	}
+
+	if r := e.run("ui", "--quit"); r.code == 0 {
+		t.Errorf("--quit with two instances running should ask which, got success: %s", r.stdout)
+	}
+	e.mustRun("ui", "--quit", names[0])
+	if got := strings.Fields(e.mustRun("ui", "--list").stdout); len(got) != 2 || got[0] != names[1] {
+		t.Errorf("after quitting %s the list = %q, want only %s", names[0], got, names[1])
+	}
+	e.mustRun("ui", "--quit", "--all")
+	if out := e.mustRun("ui", "--list").stdout; !strings.Contains(out, "not running") {
+		t.Errorf("after --quit --all: %q", out)
 	}
 }
