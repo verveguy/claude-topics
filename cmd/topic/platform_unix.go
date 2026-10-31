@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,9 @@ func userShell() string {
 }
 
 func tmuxCmd(args ...string) *exec.Cmd { return exec.Command("tmux", args...) }
+
+// attachCommand is the command a user types to watch or answer a topic's session.
+func attachCommand(tn string) string { return fmt.Sprintf("tmux attach -t %q", tn) }
 
 // tmuxStartSession runs a new-session. tmux daemonises its own server here, so nothing
 // more is needed; Windows has to detach it by hand.

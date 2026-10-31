@@ -174,7 +174,7 @@ func cmdUp(args []string) error {
 
 	if isUp(tag, name) {
 		fmt.Printf("%q is already up.\n", name)
-		fmt.Printf("  attach: tmux attach -t %q\n", tmuxName(tag, name))
+		fmt.Printf("  attach: %s\n", attachCommand(tmuxName(tag, name)))
 		// Only for a topic with a registry entry: writing one here would create an entry
 		// holding nothing but claudeArgs.
 		if len(userArgs) > 0 && fileExists(file) {
@@ -403,6 +403,12 @@ func cmdEnsureDispatcher(args []string) error {
 	// five-minute cycle restarts any that are down. See daemons.go.
 	defer ensureDaemons(configDir)
 	if isUp(profileTag(configDir), name) {
+		// Up is not the same as working: a Dispatcher whose profile lost its sign-in sits
+		// at its prompt with Remote Control off. Say so on every sweep, and fail, so the
+		// log and the scheduler's last result both show it.
+		if tn := tmuxName(profileTag(configDir), name); signedOut(capturePane(tn)) {
+			return signedOutError(name, configDir, tn)
+		}
 		fmt.Printf("%q is up.\n", name)
 		return nil
 	}

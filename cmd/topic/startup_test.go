@@ -150,3 +150,39 @@ func TestDevChannelsMatch(t *testing.T) {
 		}
 	}
 }
+
+// As captured from the windoze Dispatcher on 2026-10-30, after its profile lost its
+// sign-in: the prompt is up, so only the status bar tells it apart from a working session.
+const signedOutScreen = `● Remote Control disconnected — OAuth token unavailable — run /login to
+  restore Remote Control
+
+───────────────────────────────────────────────────────── Dispatcher (windoze) ─
+> 
+────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents
+                                                    Not logged in · Run /login
+                                        √ Update installed · Restart to update`
+
+func TestSignedOutIsRecognised(t *testing.T) {
+	if !signedOut(signedOutScreen) {
+		t.Fatal("signed-out status bar not recognised")
+	}
+	// A signed-in session whose conversation quotes the status bar is not signed out.
+	quoted := `● Its status bar says "Not logged in · Run /login" with Remote Control off.
+  Not logged in · Run /login
+
+───────────────────────────────────────────────────────── Dispatcher (windoze) ─
+> 
+────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents`
+	if signedOut(quoted) {
+		t.Fatal("a quote of the status bar in the conversation mistaken for a signed-out profile")
+	}
+	err := signedOutError("Dispatcher", "/p", "Dispatcher")
+	if !isLeftRunning(err) {
+		t.Fatal("a signed-out session must be reported as left running, so it stays recorded")
+	}
+	if !strings.Contains(err.Error(), "/login") || !strings.Contains(err.Error(), attachCommand("Dispatcher")) {
+		t.Fatalf("signed-out error does not say how to fix it:\n%s", err)
+	}
+}

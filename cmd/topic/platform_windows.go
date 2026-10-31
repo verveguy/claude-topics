@@ -155,6 +155,20 @@ func tmuxBin() string {
 	return `C:\msys64\usr\bin\tmux.exe`
 }
 
+// attachCommand is the command a user types to watch or answer a topic's session. MSYS2's
+// tmux is rarely on the Windows PATH, so a bare `tmux` fails in PowerShell, and in WSL it
+// finds a different tmux with no server. The full path works from PowerShell and cmd.
+func attachCommand(tn string) string {
+	bin := "tmux"
+	if _, err := exec.LookPath("tmux"); err != nil {
+		bin = tmuxBin()
+		if strings.ContainsRune(bin, ' ') {
+			bin = "& \"" + bin + "\"" // PowerShell's call operator for a quoted path
+		}
+	}
+	return fmt.Sprintf("%s attach -t %q", bin, tn)
+}
+
 // tmuxCmd runs tmux with the MSYS2 environment its panes need. The first client starts
 // the server, and every pane inherits the server's environment, so this is what puts
 // the Windows PATH (and with it claude.exe) inside each pane.
