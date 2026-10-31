@@ -164,12 +164,19 @@ const signedOutScreen = `● Remote Control disconnected — OAuth token unavail
                                         √ Update installed · Restart to update`
 
 func TestSignedOutIsRecognised(t *testing.T) {
-	if !startupPatterns.signedOut.MatchString(signedOutScreen) {
+	if !signedOut(signedOutScreen) {
 		t.Fatal("signed-out status bar not recognised")
 	}
-	// A conversation that merely talks about logging in is not a signed-out profile.
-	if startupPatterns.signedOut.MatchString("● You can run /login if you are not logged in.") {
-		t.Fatal("prose about logging in mistaken for a signed-out status bar")
+	// A signed-in session whose conversation quotes the status bar is not signed out.
+	quoted := `● Its status bar says "Not logged in · Run /login" with Remote Control off.
+  Not logged in · Run /login
+
+───────────────────────────────────────────────────────── Dispatcher (windoze) ─
+> 
+────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents`
+	if signedOut(quoted) {
+		t.Fatal("a quote of the status bar in the conversation mistaken for a signed-out profile")
 	}
 	err := signedOutError("Dispatcher", "/p", "Dispatcher")
 	if !isLeftRunning(err) {

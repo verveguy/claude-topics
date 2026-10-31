@@ -406,7 +406,7 @@ func cmdEnsureDispatcher(args []string) error {
 		// Up is not the same as working: a Dispatcher whose profile lost its sign-in sits
 		// at its prompt with Remote Control off. Say so on every sweep, and fail, so the
 		// log and the scheduler's last result both show it.
-		if tn := tmuxName(profileTag(configDir), name); startupPatterns.signedOut.MatchString(capturePane(tn)) {
+		if tn := tmuxName(profileTag(configDir), name); signedOut(capturePane(tn)) {
 			return signedOutError(name, configDir, tn)
 		}
 		fmt.Printf("%q is up.\n", name)

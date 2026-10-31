@@ -53,7 +53,24 @@ var startupPatterns = struct {
 	// still starts and sits at its prompt, so the session looks up — but Remote Control
 	// is off and nothing it is asked gets an answer. Found 2026-10-30: the windoze
 	// Dispatcher ran like this for days while every sweep logged it as up.
-	signedOut: regexp.MustCompile(`Not logged in\W+Run /login`),
+	// Matched by signedOut(), only in the status bar, so a conversation quoting it does
+	// not count.
+	signedOut: regexp.MustCompile(`(?m)Not logged in\W+Run /login\s*$`),
+}
+
+// signedOut reports a pane whose status bar says the profile is signed out. The status
+// bar is what sits below the input box's bottom rule; the conversation above it can
+// quote the same words — a Dispatcher asked about this very error would.
+func signedOut(pane string) bool {
+	lines := strings.Split(strings.TrimRight(pane, " \n"), "\n")
+	start := max(len(lines)-3, 0) // no rule found: the last few lines
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "────") {
+			start = i + 1
+			break
+		}
+	}
+	return startupPatterns.signedOut.MatchString(strings.Join(lines[start:], "\n"))
 }
 
 // signedOutError explains a session whose profile has lost its sign-in. It is left
@@ -487,7 +504,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		}
 		// Signed out is only certain once the status bar has settled: a ready screen
 		// shows it at once, otherwise it must hold for a couple of seconds.
-		if startupPatterns.signedOut.MatchString(pane) {
+		if signedOut(pane) {
 			signedOutPolls++
 			if state == startupReady || signedOutPolls >= 4 {
 				fmt.Println()
