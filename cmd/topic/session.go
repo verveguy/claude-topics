@@ -19,7 +19,7 @@ import (
 
 var startupPatterns = struct {
 	trust, trustAccept, devChannels, devChannelsAccept, devChannelsList,
-	ready, onboarding, externalImports, pendingChoice, noConversation *regexp.Regexp
+	ready, onboarding, externalImports, pendingChoice, noConversation, signedOut *regexp.Regexp
 }{
 	// Auto-accepted: the workspace trust prompt.
 	trust: regexp.MustCompile(`trust this folder`),
@@ -49,6 +49,19 @@ var startupPatterns = struct {
 	pendingChoice: regexp.MustCompile(`Enter to confirm`),
 	// Printed by `claude --resume` as it exits when the session has no transcript.
 	noConversation: regexp.MustCompile(`No conversation found with session ID`),
+	// The status bar of a profile whose sign-in is gone (expired or revoked). Claude
+	// still starts and sits at its prompt, so the session looks up — but Remote Control
+	// is off and nothing it is asked gets an answer. Found 2026-10-30: the windoze
+	// Dispatcher ran like this for days while every sweep logged it as up.
+	signedOut: regexp.MustCompile(`Not logged in\W+Run /login`),
+}
+
+// signedOutError explains a session whose profile has lost its sign-in. It is left
+// running: /login in that pane fixes it without a restart.
+func signedOutError(name, configDir, tn string) error {
+	return &leftRunningError{fmt.Sprintf("%q is running but profile %s is signed out of Claude:\n"+
+		"  Remote Control is off and it cannot answer anything. Sign in from its pane:\n"+
+		"    %s\n  then type /login\n  signed out", name, configDir, attachCommand(tn))}
 }
 
 type startupState int
@@ -408,6 +421,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		hint = "(cd " + dir + " && CLAUDE_CONFIG_DIR=" + configDir + " claude)"
 	}
 	sawClaude, devAnswered := false, false
+	signedOutPolls := 0
 	for range 40 {
 		pane := capturePane(tn)
 		state := classifyStartup(pane, trusted)
@@ -454,8 +468,8 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 					fmt.Println()
 					return &leftRunningError{fmt.Sprintf("%q is waiting on the development-channels confirmation and topic\n"+
 						"  could not answer it safely: %v.\n"+
-						"  It is still running. Answer it there and it carries on:\n    tmux attach -t %q\n"+
-						"  unanswered startup prompt", name, err, tn)}
+						"  It is still running. Answer it there and it carries on:\n    %s\n"+
+						"  unanswered startup prompt", name, err, attachCommand(tn))}
 				}
 				fmt.Print(" (dev channels confirmed)")
 				devAnswered = true
@@ -470,6 +484,17 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 				"  imports outside %s, which topic will not answer for you.\n"+
 				"  Start it once by hand, answer it, then retry:\n    %s\n  unanswered startup prompt",
 				name, dir, hint)
+		}
+		// Signed out is only certain once the status bar has settled: a ready screen
+		// shows it at once, otherwise it must hold for a couple of seconds.
+		if startupPatterns.signedOut.MatchString(pane) {
+			signedOutPolls++
+			if state == startupReady || signedOutPolls >= 4 {
+				fmt.Println()
+				return signedOutError(name, configDir, tn)
+			}
+		} else {
+			signedOutPolls = 0
 		}
 		if state == startupReady {
 			fmt.Println()
@@ -498,8 +523,8 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		if state == startupPendingChoice {
 			fmt.Println()
 			return &leftRunningError{fmt.Sprintf("%q is waiting on a question topic will not answer for you:\n%s\n"+
-				"  It is still running. Answer it there and it carries on:\n    tmux attach -t %q\n"+
-				"  unanswered startup prompt", name, screenTail(pane, 8), tn)}
+				"  It is still running. Answer it there and it carries on:\n    %s\n"+
+				"  unanswered startup prompt", name, screenTail(pane, 8), attachCommand(tn))}
 		}
 		time.Sleep(500 * time.Millisecond)
 		fmt.Print(".")
@@ -507,7 +532,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 	fmt.Println()
 	// Slow is not broken — a large transcript can take a while to load — so this stays a
 	// warning. But it must not pass silently as up.
-	fmt.Fprintf(os.Stderr, "  note: %q has not shown it is ready after 20s. Check it:\n    tmux attach -t %q\n", name, tn)
+	fmt.Fprintf(os.Stderr, "  note: %q has not shown it is ready after 20s. Check it:\n    %s\n", name, attachCommand(tn))
 	return nil
 }
 
@@ -698,7 +723,7 @@ func upMessage(configDir, name string) string {
 	history, _ := tmuxCmd("capture-pane", "-t", tn, "-p", "-S", "-").Output()
 	if remoteControlPatterns.disabled.Match(history) {
 		return fmt.Sprintf("%q is up. Remote Control is disabled for this account — reach it with\n"+
-			"  tmux attach -t %q, or SendMessage to %q from another session", name, tn, name)
+			"  %s, or SendMessage to %q from another session", name, attachCommand(tn), name)
 	}
 	return fmt.Sprintf("%q is up. Remote Control name: %q", name, name)
 }

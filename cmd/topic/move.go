@@ -415,7 +415,7 @@ func cmdMove(args []string) error {
 		}
 		fmt.Println()
 		fmt.Printf("Moved and running. It is now a %s-profile topic:\n", label)
-		fmt.Printf("  attach:  tmux attach -t %q\n", tmuxName(tagDst, name))
+		fmt.Printf("  attach:  %s\n", attachCommand(tmuxName(tagDst, name)))
 		fmt.Printf("  manage:  CLAUDE_CONFIG_DIR=%s topic <cmd> %q\n", dst, name)
 		return nil
 	}

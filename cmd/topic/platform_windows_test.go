@@ -42,6 +42,17 @@ func TestMsysCmdArgumentsArriveExactly(t *testing.T) {
 	}
 }
 
+// MSYS2's tmux is usually not on the Windows PATH, so a hint naming bare `tmux` fails in
+// PowerShell. Found 2026-10-30.
+func TestAttachCommandWorksWithoutTmuxOnPath(t *testing.T) {
+	t.Setenv("PATH", `C:\Windows\System32`)
+	t.Setenv("TOPIC_TMUX", `C:\msys64\usr\bin\tmux.exe`)
+	if got, want := attachCommand("personal/Dispatcher (windoze)"),
+		`C:\msys64\usr\bin\tmux.exe attach -t "personal/Dispatcher (windoze)"`; got != want {
+		t.Fatalf("attachCommand = %s, want %s", got, want)
+	}
+}
+
 // Windows records directories with backslashes, as filepath.Abs returns them.
 func TestShortDirBackslashes(t *testing.T) {
 	home := `C:\Users\me`
