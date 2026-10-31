@@ -287,13 +287,16 @@ func shortDir(dir, home string, max int) string {
 	if dir == "" {
 		return "(no directory)"
 	}
-	if home != "" && (dir == home || strings.HasPrefix(dir, home+string(filepath.Separator))) {
-		dir = "~" + strings.TrimPrefix(dir, home)
+	// os.IsPathSeparator, not '/': Windows directories are recorded with backslashes,
+	// and it takes either.
+	if home != "" && strings.HasPrefix(dir, home) && (len(dir) == len(home) || os.IsPathSeparator(dir[len(home)])) {
+		dir = "~" + dir[len(home):]
 	}
 	if r := []rune(dir); max > 1 && len(r) > max {
 		tail := string(r[len(r)-(max-1):])
-		if i := strings.IndexByte(tail, '/'); i >= 0 {
-			tail = tail[i:] // start on a whole path component, not mid-word
+		// Start on a whole path component, not mid-word.
+		if i := strings.IndexFunc(tail, func(r rune) bool { return r < 0x80 && os.IsPathSeparator(uint8(r)) }); i >= 0 {
+			tail = tail[i:]
 		}
 		dir = "…" + tail
 	}

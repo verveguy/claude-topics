@@ -41,3 +41,17 @@ func TestMsysCmdArgumentsArriveExactly(t *testing.T) {
 		t.Errorf("arguments did not arrive intact:\n got %q\nwant %q", out, want.String())
 	}
 }
+
+// Windows records directories with backslashes, as filepath.Abs returns them.
+func TestShortDirBackslashes(t *testing.T) {
+	home := `C:\Users\me`
+	for dir, want := range map[string]string{
+		`C:\Users\me\dev\x`:                        `~\dev\x`,
+		`C:\Users\meg\dev`:                         `C:\Users\meg\dev`, // a sibling of home
+		`C:\Users\me\dev\autodesk\jetpack-project`: `…\autodesk\jetpack-project`,
+	} {
+		if got := shortDir(dir, home, 28); got != want {
+			t.Errorf("shortDir(%q) = %q, want %q", dir, got, want)
+		}
+	}
+}
