@@ -846,6 +846,9 @@ func openRow(p profile, self, state, label string) {
 			uiMessage(fmt.Sprintf("could not pick up %q: %s", label, lastLine(string(out), err)))
 			return
 		}
+		if !stillWanted(label) {
+			return // another row was chosen while this one started: leave the pane to it
+		}
 	}
 	out, err := uiTmux("show", "-gv", "@right-pane").Output()
 	if err != nil {
