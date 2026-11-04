@@ -16,10 +16,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -420,6 +422,7 @@ func cmdUI(args []string, p profile) error {
 	var rows, pick, noAttach, quit, attach, list, all bool
 	var instance string
 	var activate []string // --activate STATE THIRD-FIELD INDEX: what fzf hands back on a choice
+	var open []string     // --open STATE LABEL: a down topic's pick-up, run in the background
 	collapsed := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -464,6 +467,12 @@ func cmdUI(args []string, p profile) error {
 			}
 			activate = args[i+1 : i+4]
 			i += 3
+		case "--open":
+			if i+2 >= len(args) {
+				return fmt.Errorf("ui: --open needs STATE and LABEL")
+			}
+			open = args[i+1 : i+3]
+			i += 2
 		case "--rows":
 			rows = true
 		case "--pick":
@@ -488,6 +497,14 @@ func cmdUI(args []string, p profile) error {
 	case activate != nil:
 		idx, _ := strconv.Atoi(activate[2])
 		fmt.Println(activateChoice(p, activate[0], activate[1], idx))
+		return nil
+	case open != nil:
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		openRow(p, self, open[0], open[1])
+		refreshFzf(self) // the arrow turned from down to up
 		return nil
 	case rows:
 		// Folds live on the instance's server; --collapse adds to them for a one-off listing.
@@ -769,8 +786,49 @@ func activateChoice(p profile, state, third string, index int) string {
 		// again, so the position means what it says.
 		return fmt.Sprintf("%s+clear-query+pos(%d)", reload, index+1)
 	}
+	setWanted(third)
+	if state == "down" {
+		// Picking a topic up takes seconds. Doing it here would hold fzf (and so every
+		// click after this one) until it finished, so it runs on its own and refreshes
+		// the list when done. Another pick meanwhile wins: see wanted.
+		bg := exec.Command(self, "ui", "--open", state, third)
+		if startDetached(bg) != nil {
+			openRow(p, self, state, third)
+			return reload
+		}
+		go func() { _ = bg.Wait() }()
+		return ""
+	}
 	openRow(p, self, state, third)
 	return reload // an arrow may have turned from down to up
+}
+
+// setWanted records the row most recently chosen, on the instance's server. A topic still
+// starting when another row is chosen must not then steal the right pane.
+func setWanted(label string) { _ = uiTmux("set", "-g", "@wanted", label).Run() }
+
+// stillWanted is false when a later choice has replaced label.
+func stillWanted(label string) bool {
+	out, err := uiTmux("show", "-gv", "@wanted").Output()
+	w := strings.TrimSpace(string(out))
+	return err != nil || w == "" || w == label
+}
+
+// refreshFzf asks the running fzf (see runFzf's --listen) to reload its rows. It is
+// best-effort: with no fzf to ask, the list refreshes on the next choice or ctrl-r.
+func refreshFzf(self string) {
+	sock := os.Getenv("TOPIC_UI_FZF")
+	if sock == "" {
+		return
+	}
+	c := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+		}}}
+	resp, err := c.Post("http://fzf/", "text/plain", strings.NewReader("reload-sync("+shellQuote(self)+" ui --rows)"))
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 // openRow points the right pane at a topic or session, picking a down topic up first.
@@ -877,7 +935,11 @@ func runFzf(fzf string, rows []uiRow, self string, stale <-chan struct{}) error 
 	activate := "transform(" + shellQuote(self) + " ui --activate {1} {3} {n})"
 	// reverse-list puts the prompt at the bottom with the list still running top-down.
 	// ctrl-q closes this whole UI instance: its server goes, and the picker with it.
-	cmd := exec.Command(fzf, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--layout=reverse-list",
+	sock := filepath.Join(os.TempDir(), fmt.Sprintf("topic-fzf-%d.sock", os.Getpid()))
+	_ = os.Remove(sock)
+	defer os.Remove(sock)
+	os.Setenv("TOPIC_UI_FZF", sock) // for the background pick-ups that refresh the list
+	cmd := exec.Command(fzf, "--listen="+sock, "--delimiter=\t", "--with-nth=2", "--ansi", "--no-sort", "--layout=reverse-list",
 		"--header=enter: open/fold  ^r: refresh  ^q: quit",
 		"--bind=enter:"+activate,
 		"--bind=double-click:"+activate,
