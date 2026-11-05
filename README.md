@@ -354,8 +354,10 @@ topic ui
 ```
 
 A topic list on the left, grouped by working directory, and the selected topic's tmux
-session on the right. Enter on a **down** topic picks it up first; an **adopted** topic is
-refused until you exit the original session. `Ctrl-r` refreshes the list.
+session on the right. Enter on a **down** topic picks it up first, in the background, so
+the list stays usable while it starts (pick several in a row and the right pane lands on the
+last one you chose); an **adopted** topic is refused until you exit the original session.
+`Ctrl-r` refreshes the list.
 
 Every `topic ui` is its own instance on its own tmux server (`-L topics-ui-<id>`) with
 prefix `C-a`, so two terminal windows give two independent UIs, each with its own folded
