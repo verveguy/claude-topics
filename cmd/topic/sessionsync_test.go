@@ -2,9 +2,11 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // /clear starts a new session id inside a running Claude, and topic only records an id
@@ -177,5 +179,35 @@ func TestSyncSessionIDStandsDownIfTheRegistryChangedMeanwhile(t *testing.T) {
 	}
 	if m := load(file); scalar(m["sessionId"]) != "someone-else" || scalar(m["state"]) != "down" {
 		t.Errorf("sync overwrote a concurrent change: %v", m)
+	}
+}
+
+// A target of `=name` with no colon is read by tmux as a window, and when no session has
+// that exact name it falls back to prefix matching — so the live session of "V3RV Website
+// Deps" answered for a down "V3RV Website", and the sweep re-pointed the down topic at
+// the sibling's conversation. Found 2026-11-06; both topics then resumed one transcript.
+func TestPaneLookupsDoNotMatchASiblingByPrefix(t *testing.T) {
+	cfg := t.TempDir()
+	sibling := tmuxName(profileTag(cfg), "ZZ unit prefix extra")
+	fake := filepath.Join(t.TempDir(), "claude")
+	if sleep, err := exec.LookPath("sleep"); err != nil || os.Symlink(sleep, fake) != nil {
+		t.Skip("cannot fake a claude process")
+	}
+	if tmuxRun("new-session", "-d", "-s", sibling, fake+" 60") != nil {
+		t.Skip("tmux unavailable")
+	}
+	defer killSession(sibling)
+	time.Sleep(500 * time.Millisecond)
+
+	short := tmuxName(profileTag(cfg), "ZZ unit prefix")
+	if paneRunningClaude(sibling) == false {
+		t.Skip("fake claude process not recognised")
+	}
+	if paneRunningClaude(short) || paneShowsClaude(short) {
+		t.Error("a topic with no tmux session picked up its longer-named sibling's panes")
+	}
+	// A live record for the sibling's pids must not be reported for the absent topic.
+	if got := liveSessionID(cfg, "ZZ unit prefix"); got != "" {
+		t.Errorf("liveSessionID = %q for a topic with no session", got)
 	}
 }

@@ -114,7 +114,7 @@ func daemonState(name string) string {
 // paneShellHasChildren reports whether any pane's shell process has a child: something is
 // running under it even though the shell is what tmux reports in the foreground.
 func paneShellHasChildren(name string) bool {
-	out, err := tmuxCmd("list-panes", "-t", "="+name, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+name+":", "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return false
 	}

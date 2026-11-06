@@ -232,7 +232,7 @@ var shellCommands = map[string]bool{
 // panes. launchSession deliberately leaves the shell alive when Claude exits, so this
 // is what separates a live topic from the husk left behind by one that quit.
 func paneRunningClaude(target string) bool {
-	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target+":", "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
@@ -263,7 +263,7 @@ var claudeProcessName = regexp.MustCompile(`^(claude|\d+\.\d+\.\d+)$`)
 // anything that is merely not a shell — a fresh shell runs other commands (`gh auth
 // token`, version managers) while it loads its rc files.
 func paneShowsClaude(target string) bool {
-	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target+":", "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
@@ -586,7 +586,7 @@ func stopSession(configDir, name string) {
 // the registry has never heard of.
 func liveSessionID(configDir, name string) string {
 	tn := tmuxName(profileTag(configDir), name)
-	out, err := tmuxCmd("list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+tn+":", "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return ""
 	}
