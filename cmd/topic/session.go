@@ -189,8 +189,14 @@ func recordLaunch(launchErr error, record func() error) error {
 
 func tmuxRun(args ...string) error { return tmuxCmd(args...).Run() }
 
+// exactTarget names a session for tmux -t exactly. A bare name falls back to prefix
+// matching when no session has exactly that name, so a key sent to a topic that has
+// just gone could land in a longer-named sibling ("V3RV Website" -> "V3RV Website
+// Deps"); for stopSession's /exit that would end the wrong topic.
+func exactTarget(name string) string { return "=" + name + ":" }
+
 func capturePane(target string) string {
-	out, err := tmuxCmd("capture-pane", "-t", target, "-p").Output()
+	out, err := tmuxCmd("capture-pane", "-t", exactTarget(target), "-p").Output()
 	if err != nil {
 		return ""
 	}
@@ -232,7 +238,7 @@ var shellCommands = map[string]bool{
 // panes. launchSession deliberately leaves the shell alive when Claude exits, so this
 // is what separates a live topic from the husk left behind by one that quit.
 func paneRunningClaude(target string) bool {
-	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target+":", "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
@@ -263,7 +269,7 @@ var claudeProcessName = regexp.MustCompile(`^(claude|\d+\.\d+\.\d+)$`)
 // anything that is merely not a shell — a fresh shell runs other commands (`gh auth
 // token`, version managers) while it loads its rc files.
 func paneShowsClaude(target string) bool {
-	out, err := tmuxCmd("list-panes", "-t", "="+target, "-F", "#{pane_current_command}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+target+":", "-F", "#{pane_current_command}").Output()
 	if err != nil {
 		return false
 	}
@@ -331,7 +337,7 @@ func selectMenuOption(target, pane string, want *regexp.Regexp) error {
 		key, steps = "Up", -steps
 	}
 	for range steps {
-		_ = tmuxRun("send-keys", "-t", target, key)
+		_ = tmuxRun("send-keys", "-t", exactTarget(target), key)
 		time.Sleep(120 * time.Millisecond)
 	}
 	time.Sleep(250 * time.Millisecond)
@@ -342,7 +348,7 @@ func selectMenuOption(target, pane string, want *regexp.Regexp) error {
 	if wanted < 0 || cursor != wanted {
 		return fmt.Errorf("could not move the selection onto %s", want)
 	}
-	return tmuxRun("send-keys", "-t", target, "Enter")
+	return tmuxRun("send-keys", "-t", exactTarget(target), "Enter")
 }
 
 func abs(i int) int {
@@ -428,7 +434,7 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 	if err := tmuxStartSession(append([]string{"new-session", "-d", "-s", tn, "-c", tmuxDir(dir)}, tmuxShell()...)...); err != nil {
 		return fmt.Errorf("creating tmux session %q: %w", tn, err)
 	}
-	if err := tmuxRun("send-keys", "-t", tn, cmd, "Enter"); err != nil {
+	if err := tmuxRun("send-keys", "-t", exactTarget(tn), cmd, "Enter"); err != nil {
 		return err
 	}
 
@@ -562,9 +568,9 @@ func stopSession(configDir, name string) {
 	if !sessionExists(tn) {
 		return
 	}
-	_ = tmuxRun("send-keys", "-t", tn, "Escape") // interrupt any in-flight turn
+	_ = tmuxRun("send-keys", "-t", exactTarget(tn), "Escape") // interrupt any in-flight turn
 	time.Sleep(400 * time.Millisecond)
-	_ = tmuxRun("send-keys", "-t", tn, "/exit", "Enter")
+	_ = tmuxRun("send-keys", "-t", exactTarget(tn), "/exit", "Enter")
 	for range 12 {
 		if tmuxRun("has-session", "-t", "="+tn) != nil {
 			return
@@ -587,7 +593,7 @@ func stopSession(configDir, name string) {
 // the registry has never heard of.
 func liveSessionID(configDir, name string) string {
 	tn := tmuxName(profileTag(configDir), name)
-	out, err := tmuxCmd("list-panes", "-t", "="+tn, "-F", "#{pane_pid}").Output()
+	out, err := tmuxCmd("list-panes", "-t", "="+tn+":", "-F", "#{pane_pid}").Output()
 	if err != nil {
 		return ""
 	}
@@ -738,7 +744,7 @@ const remoteControlDisabled = `Remote\s+Control\s+is\s+disabled`
 // seed prompt's first turn can push it off before this runs.
 func upMessage(configDir, name string) string {
 	tn := tmuxName(profileTag(configDir), name)
-	history, _ := tmuxCmd("capture-pane", "-t", tn, "-p", "-S", "-").Output()
+	history, _ := tmuxCmd("capture-pane", "-t", exactTarget(tn), "-p", "-S", "-").Output()
 	if remoteControlPatterns.disabled.Match(history) {
 		return fmt.Sprintf("%q is up. Remote Control is disabled for this account — reach it with\n"+
 			"  %s, or SendMessage to %q from another session", name, attachCommand(tn), name)
@@ -768,19 +774,19 @@ func disconnectRemoteControl(configDir, name string) (bool, error) {
 	if !sessionExists(tn) || !paneRunningClaude(tn) {
 		return false, nil
 	}
-	clearInput := func() { _ = tmuxRun("send-keys", "-t", tn, "C-u") }
+	clearInput := func() { _ = tmuxRun("send-keys", "-t", exactTarget(tn), "C-u") }
 
-	_ = tmuxRun("send-keys", "-t", tn, "Escape") // interrupt any in-flight turn
+	_ = tmuxRun("send-keys", "-t", exactTarget(tn), "Escape") // interrupt any in-flight turn
 	time.Sleep(400 * time.Millisecond)
 	clearInput()
-	_ = tmuxRun("send-keys", "-t", tn, "-l", "/remote-control")
+	_ = tmuxRun("send-keys", "-t", exactTarget(tn), "-l", "/remote-control")
 	time.Sleep(1200 * time.Millisecond)
 	if !remoteControlPatterns.connected.MatchString(capturePane(tn)) {
 		clearInput()
 		return false, nil
 	}
 
-	_ = tmuxRun("send-keys", "-t", tn, "Enter")
+	_ = tmuxRun("send-keys", "-t", exactTarget(tn), "Enter")
 	var pane string
 	for range 20 {
 		time.Sleep(250 * time.Millisecond)
@@ -789,7 +795,7 @@ func disconnectRemoteControl(configDir, name string) (bool, error) {
 		}
 	}
 	if err := selectMenuOption(tn, pane, remoteControlPatterns.disconnectOption); err != nil {
-		_ = tmuxRun("send-keys", "-t", tn, "Escape")
+		_ = tmuxRun("send-keys", "-t", exactTarget(tn), "Escape")
 		return false, err
 	}
 	for range 40 {
