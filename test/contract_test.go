@@ -438,3 +438,46 @@ func TestSetArgsNeedsAnExistingTopic(t *testing.T) {
 	}
 	mustContain(t, r.stderr, "no such topic", "should say why")
 }
+
+// restore reads what the registry recorded: up with nothing running is what a reboot
+// leaves; a session that exited by itself, or was put down, is not brought back.
+func TestRestoreListsAndDiscardsWhatACrashLeft(t *testing.T) {
+	e := newEnv(t)
+	e.seedTopic("lost", map[string]any{"name": "Lost", "dir": "/tmp", "sessionId": "a", "state": "up"})
+	e.seedTopic("quit", map[string]any{"name": "Quit", "dir": "/tmp", "sessionId": "b", "state": "exited"})
+	e.seedTopic("parked", map[string]any{"name": "Parked", "dir": "/tmp", "sessionId": "c", "state": "down"})
+
+	mustContain(t, e.mustRun("list").stdout, "1 topic was up when the machine went down",
+		"list should say restore has work to do")
+	r := e.mustRun("restore", "--dry-run")
+	mustContain(t, r.stdout, "would pick up: Lost", "dry run should list the lost topic")
+	if strings.Contains(r.stdout, "Quit") || strings.Contains(r.stdout, "Parked") {
+		t.Errorf("dry run lists topics that ended on purpose:\n%s", r.stdout)
+	}
+	if e.readTopic("lost")["state"] != "up" {
+		t.Error("--dry-run changed the registry")
+	}
+
+	e.mustRun("restore", "--discard")
+	if got := e.readTopic("lost")["state"]; got != "down" {
+		t.Errorf("after --discard, state = %v, want down", got)
+	}
+	mustContain(t, e.mustRun("restore").stdout, "nothing to restore", "nothing left after --discard")
+	if strings.Contains(e.mustRun("list").stdout, "topic restore") {
+		t.Error("list still nudges after --discard")
+	}
+}
+
+func TestRestoreRejectsUnknownFlag(t *testing.T) {
+	e := newEnv(t)
+	if r := e.run("restore", "--everything"); r.code == 0 {
+		t.Errorf("unknown flag accepted:\n%s", r.out())
+	}
+}
+
+func TestRestoreRefusesNamesWithAllProfiles(t *testing.T) {
+	e := newEnv(t)
+	if r := e.run("restore", "Lost", "--all-profiles"); r.code == 0 {
+		t.Errorf("names and --all-profiles accepted together:\n%s", r.out())
+	}
+}

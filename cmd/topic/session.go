@@ -416,7 +416,8 @@ func launchSession(configDir, name, dir string, claudeArgs ...string) error {
 		dir = abs
 	}
 
-	cmd := claudeCommand(configDir, name, claudeArgs)
+	// The hook records a session that ends by itself; see restore.go.
+	cmd := claudeCommand(configDir, name, claudeArgs) + exitHook(configDir, name)
 
 	// We may be relaunching over the husk of a session that quit — tmux refuses to
 	// reuse the name. Kill outright rather than clearHusk: isUp said this topic was

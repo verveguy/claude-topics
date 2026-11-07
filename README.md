@@ -33,6 +33,7 @@ topic status "<name>"         # dir, session UUID, generation, retired sessions
 topic forget "<name>"         # stop tracking it (keeps handoff docs)
 topic prune                   # show topics that are dead; --yes removes them
 topic down-all                # put every live topic in this profile down
+topic restore                 # after a crash or reboot: bring back what was up
 
 topic up "<name>" [dir] --seed-from <file>    # start a NEW topic from a brief
 ```
@@ -314,6 +315,8 @@ cannot be mistaken for missing topics.
 - **[Cycling everything](docs/guide.md#cycling-everything-topic-cycle)** —
   `topic cycle down` / `up` takes every profile's topics down and back, launchd agents
   included, for logging in and out or upgrading.
+- **[After a crash](docs/guide.md#after-a-crash--topic-restore)** — `topic restore`
+  brings back every topic that was up when the machine crashed or rebooted.
 - **[Adopting](docs/guide.md#adopting-an-existing-session)** — bring a session
   `topic` did not launch under management, live or merely resumable.
 

@@ -162,6 +162,9 @@ func cmdList(args []string) error {
 		state := topicState(tag, topicsRoot, name)
 		fmt.Printf("  %-7s %s%s\n", state, name, argsMark(topicsRoot, name))
 	}
+	if n := restoreNudge(configDir, topicsRoot); n != "" {
+		fmt.Printf("\n  %s\n", n)
+	}
 	return nil
 }
 

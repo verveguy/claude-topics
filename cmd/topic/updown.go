@@ -247,8 +247,10 @@ func cmdUp(args []string) error {
 		}
 	}
 
+	// restoreKey goes with any launch: cycle down's mark is for that one cycle, and a
+	// topic picked up since then has been handled by hand.
 	if err := cmdSet([]string{file, "name", name, "dir", dir, "sessionId", sid,
-		"state", "up", "lastPickedUp", nowISO()}); err != nil {
+		"state", "up", "lastPickedUp", nowISO(), restoreKey, ""}); err != nil {
 		return err
 	}
 	fmt.Println(upMessage(configDir, name))
@@ -273,9 +275,13 @@ func cmdDown(args []string) error {
 		// the name is free and `topic list` stops showing a window that does nothing.
 		if clearHusk(profileTag(configDir), name) {
 			fmt.Printf("%q had already exited; cleared its leftover tmux session.\n", name)
-			return cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()})
+			return cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO(), restoreKey, ""})
 		}
 		fmt.Printf("%q is already down.\n", name)
+		// Asking still says "keep it down": cycle up must not bring it back.
+		if regGet(topicsRoot, name, restoreKey) != "" {
+			return cmdSet([]string{topicFile(topicsRoot, name), restoreKey, ""})
+		}
 		return nil
 	}
 	fmt.Printf("Putting down %q…\n", name)
@@ -285,21 +291,24 @@ func cmdDown(args []string) error {
 		return err
 	}
 	stopSession(configDir, name)
-	if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()}); err != nil {
+	// A deliberate down clears cycle down's mark; down-all --remember sets it again.
+	if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO(), restoreKey, ""}); err != nil {
 		return err
 	}
 	fmt.Printf("%q is down. Session retained — `topic up %q` resumes it.\n", name, name)
 	return nil
 }
 
-// down-all <config-dir> <topics-root> [--include-self] [--dry-run]
+// down-all <config-dir> <topics-root> [--include-self] [--dry-run] [--remember]
 func cmdDownAll(args []string) error {
-	includeSelf, dry := false, false
+	includeSelf, dry, remember := false, false, false
 	var positional []string
 	for _, a := range args {
 		switch a {
 		case "--include-self":
 			includeSelf = true
+		case "--remember":
+			remember = true
 		case "--dry-run":
 			dry = true
 		default:
@@ -347,6 +356,12 @@ func cmdDownAll(args []string) error {
 		}
 		if err := cmdDown([]string{name, configDir, topicsRoot}); err != nil {
 			return err
+		}
+		// For `topic cycle up`, which restores what cycle down put down.
+		if remember {
+			if err := cmdSet([]string{topicFile(topicsRoot, name), restoreKey, nowISO()}); err != nil {
+				return err
+			}
 		}
 	}
 	if !did {
@@ -417,7 +432,12 @@ func cmdEnsureDispatcher(args []string) error {
 		dir = dispatcherDir(configDir)
 	}
 	fmt.Printf("%q is down — starting it.\n", name)
-	return cmdUp([]string{name, dir, configDir, topicsRoot})
+	err := cmdUp([]string{name, dir, configDir, topicsRoot})
+	// The Dispatcher being down usually means the machine was: say what else was lost.
+	if n := restoreNudge(configDir, topicsRoot); n != "" {
+		fmt.Println(n)
+	}
+	return err
 }
 
 // dispatcherDir is where a Dispatcher session runs when the registry records no

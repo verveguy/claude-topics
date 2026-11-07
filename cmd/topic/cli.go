@@ -88,9 +88,18 @@ what makes hand-off possible.
                               next launch registers a fresh one — under the current
                               profile's account, named after the topic.
 
+  topic restore ["<name>"...] Bring back the topics a reboot or crash took down:
+                              those recorded as up whose session is not running.
+                              A session that exits by itself (/exit) is recorded
+                              as exited, so it is not brought back. --dry-run lists
+                              them, --discard marks them down instead,
+                              --all-profiles covers every profile. From inside a
+                              topic (the Dispatcher) it runs in the background.
+
   topic cycle down | up       Take every profile's topics down cleanly, and bring
                               them back — agents included. Two verbs, because the
                               point is what you do in between (log in/out, upgrade).
+                              cycle up restores the topics cycle down put down.
   topic ensure-dispatcher     Start the Dispatcher topic if it is not up, and restart
                               this profile's registered daemons that are down.
                               (Run by launchd at login and every 5 minutes.)
@@ -236,6 +245,11 @@ func main() {
 	case "cycle":
 		warnIfUnsigned()
 		err = cmdCycle(args)
+	case "restore":
+		warnIfUnsigned()
+		err = cmdRestore(withProfile(args))
+	case "session-ended":
+		err = cmdSessionEnded(args)
 	case "ensure-dispatcher":
 		// The launchd path, and the one that creates the tmux server after a reboot —
 		// so this is where an unsigned binary does its damage. The warning lands in
@@ -281,7 +295,7 @@ func isHelpFlag(a string) bool { return a == "-h" || a == "--help" }
 // --help`) and the low-level helpers, which take arbitrary values.
 func wantsHelp(cmd string, args []string) bool {
 	switch cmd {
-	case "get", "set", "sessions", "find-titled", "transcript-title", "transcript-cwd":
+	case "get", "set", "session-ended", "sessions", "find-titled", "transcript-title", "transcript-cwd":
 		return len(args) > 0 && isHelpFlag(args[0])
 	case "daemon":
 		if len(args) > 3 {

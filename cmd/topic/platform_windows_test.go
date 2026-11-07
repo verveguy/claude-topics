@@ -66,3 +66,10 @@ func TestShortDirBackslashes(t *testing.T) {
 		}
 	}
 }
+
+// The exit hook is run by MSYS2 bash, which wants /c/... rather than C:\...
+func TestShellPathForMsysBash(t *testing.T) {
+	if got, want := shellPath(`C:\Users\me\.local\bin\topic.exe`), "/c/Users/me/.local/bin/topic.exe"; got != want {
+		t.Errorf("shellPath = %q, want %q", got, want)
+	}
+}
