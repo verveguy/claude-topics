@@ -62,6 +62,9 @@ func userShell() string {
 
 func tmuxCmd(args ...string) *exec.Cmd { return exec.Command("tmux", args...) }
 
+// shellPath is p as the pane's shell names it.
+func shellPath(p string) string { return p }
+
 // attachCommand is the command a user types to watch or answer a topic's session.
 func attachCommand(tn string) string { return fmt.Sprintf("tmux attach -t %q", tn) }
 

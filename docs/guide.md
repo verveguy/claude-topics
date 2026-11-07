@@ -72,8 +72,8 @@ between:
 ```bash
 topic cycle down           # unload agents, put every topic in every profile down
 # ...log each profile in from a plain session in ~ , check /status...
-topic cycle up             # reload agents, start each profile's Dispatcher
-topic up "<name>"          # pick topics back up as you want them
+topic cycle up             # reload agents, start each profile's Dispatcher,
+                           # and restore the topics cycle down put down
 ```
 
 Both take `--dry-run`. `topic cycle profiles` lists what it will act on — the
@@ -89,6 +89,35 @@ The ordering is the entire reason this exists:
   `--resume`. Nothing here destroys work, so `down` is safe to run freely.
 - **The calling session is skipped**, since putting it down would kill the script
   mid-run. It is named at the end so you can take it down last by hand.
+
+## After a crash — `topic restore`
+
+When the machine crashes or reboots, the Dispatcher comes back at login, but nothing
+else does. `topic restore` brings back every topic that was up when it went down:
+
+```bash
+topic restore --dry-run    # what would come back
+topic restore              # bring them all back, one at a time
+topic restore "<name>"     # just these
+topic restore --discard    # leave them down, and stop being told about them
+topic restore --all-profiles
+```
+
+`topic list` says when there is something to restore, and so does the Dispatcher's
+log the first time it starts after a reboot. Asked from inside a topic — "restore my
+topics", to the Dispatcher — it runs in the background and logs to
+`<profile>/topics/restore.log`, since each launch waits for its session to start.
+
+It knows what was up because the registry records it as sessions come and go. Every
+launch records the topic as up. `topic down` records it as down. A session that ends
+by itself — `/exit`, or Claude crashing — records itself as exited, through a command
+chained after `claude` on the line typed into its pane. A crash, a reboot or
+`tmux kill-server` kills that shell before it can run anything, so those topics are
+left recorded as up with nothing running them: exactly the ones to bring back.
+
+Sessions started by a `topic` older than this have no such hook, so a topic you
+`/exit`ed from one of them looks crashed. Check `--dry-run` the first time, and
+`--discard` what should stay down.
 
 ## Adopting an existing session
 
