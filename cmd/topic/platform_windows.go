@@ -155,6 +155,14 @@ func tmuxBin() string {
 	return `C:\msys64\usr\bin\tmux.exe`
 }
 
+// shellPath is p as the pane's shell — MSYS2 bash — names it: C:\a\b -> /c/a/b.
+func shellPath(p string) string {
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		p = "/" + strings.ToLower(p[:1]) + p[2:]
+	}
+	return strings.ReplaceAll(p, `\`, "/")
+}
+
 // attachCommand is the command a user types to watch or answer a topic's session. MSYS2's
 // tmux is rarely on the Windows PATH, so a bare `tmux` fails in PowerShell, and in WSL it
 // finds a different tmux with no server. The full path works from PowerShell and cmd.

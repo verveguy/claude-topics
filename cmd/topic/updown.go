@@ -292,14 +292,16 @@ func cmdDown(args []string) error {
 	return nil
 }
 
-// down-all <config-dir> <topics-root> [--include-self] [--dry-run]
+// down-all <config-dir> <topics-root> [--include-self] [--dry-run] [--remember]
 func cmdDownAll(args []string) error {
-	includeSelf, dry := false, false
+	includeSelf, dry, remember := false, false, false
 	var positional []string
 	for _, a := range args {
 		switch a {
 		case "--include-self":
 			includeSelf = true
+		case "--remember":
+			remember = true
 		case "--dry-run":
 			dry = true
 		default:
@@ -347,6 +349,12 @@ func cmdDownAll(args []string) error {
 		}
 		if err := cmdDown([]string{name, configDir, topicsRoot}); err != nil {
 			return err
+		}
+		// For `topic cycle up`, which restores what cycle down put down.
+		if remember {
+			if err := cmdSet([]string{topicFile(topicsRoot, name), restoreKey, nowISO()}); err != nil {
+				return err
+			}
 		}
 	}
 	if !did {
@@ -417,7 +425,12 @@ func cmdEnsureDispatcher(args []string) error {
 		dir = dispatcherDir(configDir)
 	}
 	fmt.Printf("%q is down — starting it.\n", name)
-	return cmdUp([]string{name, dir, configDir, topicsRoot})
+	err := cmdUp([]string{name, dir, configDir, topicsRoot})
+	// The Dispatcher being down usually means the machine was: say what else was lost.
+	if n := restoreNudge(configDir, topicsRoot); n != "" {
+		fmt.Println(n)
+	}
+	return err
 }
 
 // dispatcherDir is where a Dispatcher session runs when the registry records no

@@ -170,6 +170,17 @@ else does.
 calling session. `topic cycle down` / `topic cycle up` does it across every profile
 and handles the launchd agents, which otherwise restart Dispatchers underneath you.
 Both are lossless and both take `--dry-run`; show the user the dry run first.
+`cycle up` brings back the topics `cycle down` put down.
+
+## After a crash or reboot
+
+`topic restore` brings back every topic that was up when the machine went down: those
+the registry records as up whose session is not running. A session that ended by
+itself (`/exit`) records itself as exited and is not brought back. `topic list` ends
+with a line saying how many are waiting. Show the user `topic restore --dry-run`
+first; `--discard` leaves the listed topics down for good, `--all-profiles` covers
+every profile. Run from inside a topic (as the Dispatcher), it works in the background
+and logs to `<profile>/topics/restore.log` — report that, not a result.
 
 ## Removing topics
 

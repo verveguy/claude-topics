@@ -175,7 +175,7 @@ func cmdCycle(args []string) error {
 		fmt.Println("== 2. Putting topics down (lossless — every session stays resumable)")
 		for _, a := range launchAgents() {
 			fmt.Printf("  -- profile: %s\n", a.configDir)
-			argv := []string{"down-all"}
+			argv := []string{"down-all", "--remember"}
 			if dry {
 				argv = append(argv, "--dry-run")
 			}
@@ -210,8 +210,17 @@ func cmdCycle(args []string) error {
 			}
 		}
 		fmt.Println()
-		fmt.Println(`Other topics stay down until you pick them up:  topic up "<name>"`)
-		fmt.Println("(they are unchanged — up resumes the same session)")
+		fmt.Println("== 3. Bringing back the topics cycle down put down")
+		for _, a := range launchAgents() {
+			fmt.Printf("  -- profile: %s\n", a.configDir)
+			argv := []string{"restore"}
+			if dry {
+				argv = append(argv, "--dry-run")
+			}
+			if err := inProfile(a.configDir, argv...); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	return fmt.Errorf("usage: topic cycle down|up|profiles [--dry-run]")
