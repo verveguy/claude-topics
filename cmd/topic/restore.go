@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // restore: bring back the topics a reboot, a crash or `topic cycle down` took down.
@@ -63,6 +64,39 @@ func topicsRootFor(configDir string) string {
 func cmdSessionEnded(args []string) error {
 	need(args, 3, "session-ended <name> <config-dir> <topics-root>")
 	name, configDir, topicsRoot := args[0], args[1], args[2]
+	finished, err := withinLimit(sessionEndedLimit, func() error {
+		return sessionEnded(name, configDir, topicsRoot)
+	})
+	if !finished {
+		// Leaving "up" behind costs only a false restore candidate; a hook that never
+		// ends costs a process that outlives its pane and holds the topic's directory.
+		fmt.Fprintf(os.Stderr, "topic session-ended: gave up after %s; %q stays recorded as up\n",
+			sessionEndedLimit, name)
+	}
+	return err
+}
+
+// sessionEndedLimit bounds the exit hook. It normally takes milliseconds. On Windows a
+// hook that hangs is never cleaned up — killing a tmux session does not stop the native
+// programs in its pane — and one was seen (2026-11-07) still running minutes after
+// `topic down`, holding the topic's directory open. Where it hung is not known, so the
+// limit covers all of it.
+var sessionEndedLimit = 10 * time.Second
+
+// withinLimit runs f, giving up on it after d. finished is false if it was abandoned;
+// the caller then returns and the process exits, taking f with it.
+func withinLimit(d time.Duration, f func() error) (finished bool, err error) {
+	done := make(chan error, 1)
+	go func() { done <- f() }()
+	select {
+	case err := <-done:
+		return true, err
+	case <-time.After(d):
+		return false, nil
+	}
+}
+
+func sessionEnded(name, configDir, topicsRoot string) error {
 	file := topicFile(topicsRoot, name)
 	if !fileExists(file) || regGet(topicsRoot, name, "state") != "up" {
 		return nil
