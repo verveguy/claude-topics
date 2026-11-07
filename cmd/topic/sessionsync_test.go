@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -206,8 +207,21 @@ func TestPaneLookupsDoNotMatchASiblingByPrefix(t *testing.T) {
 	if paneRunningClaude(short) || paneShowsClaude(short) {
 		t.Error("a topic with no tmux session picked up its longer-named sibling's panes")
 	}
-	// A live record for the sibling's pids must not be reported for the absent topic.
+	// Give the sibling's pane a live session record, and check its own lookup finds it:
+	// without one, liveSessionID returns "" whichever panes it lists, and the assertion
+	// below would pass with the fix reverted.
+	out, err := tmuxCmd("list-panes", "-t", "="+sibling+":", "-F", "#{pane_pid}").Output()
+	pid := atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid == 0 {
+		t.Fatalf("no pane pid for the sibling: %v %q", err, out)
+	}
+	writeJSON(t, filepath.Join(cfg, "sessions", strconv.Itoa(pid)+".json"),
+		map[string]any{"pid": pid, "sessionId": "sibling-session"})
+	if got := liveSessionID(cfg, "ZZ unit prefix extra"); got != "sibling-session" {
+		t.Fatalf("liveSessionID(sibling) = %q, want sibling-session — the record is not being found", got)
+	}
+	// That record must not be reported for the absent topic.
 	if got := liveSessionID(cfg, "ZZ unit prefix"); got != "" {
-		t.Errorf("liveSessionID = %q for a topic with no session", got)
+		t.Errorf("liveSessionID = %q for a topic with no session — the sibling's", got)
 	}
 }
