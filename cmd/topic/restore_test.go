@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func seedRestoreTopic(t *testing.T, root, name string, fields ...string) {
@@ -90,5 +92,27 @@ func TestUpAndDownClearTheCycleMark(t *testing.T) {
 	}
 	if got := restoreCandidates(root, nil, func(string) bool { return false }); len(got) != 0 {
 		t.Errorf("a topic put down by hand is still a restore candidate: %v", got)
+	}
+}
+
+func TestWithinLimitAbandonsWorkThatHangs(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	start := time.Now()
+	finished, err := withinLimit(50*time.Millisecond, func() error {
+		<-release // hangs until the test ends
+		return nil
+	})
+	if finished || err != nil {
+		t.Fatalf("hung work: finished=%v err=%v, want false, nil", finished, err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("gave up after %s, want about 50ms", took)
+	}
+
+	want := errors.New("boom")
+	finished, err = withinLimit(time.Second, func() error { return want })
+	if !finished || err != want {
+		t.Fatalf("quick work: finished=%v err=%v, want true, %v", finished, err, want)
 	}
 }
