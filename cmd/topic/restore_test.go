@@ -68,3 +68,27 @@ func TestExitHookFollowsClaude(t *testing.T) {
 		t.Errorf("hook = %q", hook)
 	}
 }
+
+// cycle down's mark is for that one cycle: a topic handled by hand since then must not
+// be restored by the next cycle up. Found by pruefer on #18.
+func TestUpAndDownClearTheCycleMark(t *testing.T) {
+	root, cfg, dir := t.TempDir(), t.TempDir(), t.TempDir()
+	stubLaunch(t, nil)
+	seedRestoreTopic(t, root, "Cycled", "sessionId", "a", "dir", dir, "state", "down", restoreKey, "2026-11-07T10:00:00+0000")
+
+	if err := cmdUp([]string{"Cycled", cfg, root}); err != nil {
+		t.Fatal(err)
+	}
+	if got := regGet(root, "Cycled", restoreKey); got != "" {
+		t.Errorf("after up, %s = %q, want it cleared", restoreKey, got)
+	}
+
+	// A topic that is down already: `topic down` still records the decision.
+	_ = cmdSet([]string{topicFile(root, "Cycled"), "state", "down", restoreKey, "x"})
+	if err := cmdDown([]string{"Cycled", cfg, root}); err != nil {
+		t.Fatal(err)
+	}
+	if got := restoreCandidates(root, nil, func(string) bool { return false }); len(got) != 0 {
+		t.Errorf("a topic put down by hand is still a restore candidate: %v", got)
+	}
+}

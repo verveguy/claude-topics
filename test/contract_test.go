@@ -474,3 +474,10 @@ func TestRestoreRejectsUnknownFlag(t *testing.T) {
 		t.Errorf("unknown flag accepted:\n%s", r.out())
 	}
 }
+
+func TestRestoreRefusesNamesWithAllProfiles(t *testing.T) {
+	e := newEnv(t)
+	if r := e.run("restore", "Lost", "--all-profiles"); r.code == 0 {
+		t.Errorf("names and --all-profiles accepted together:\n%s", r.out())
+	}
+}

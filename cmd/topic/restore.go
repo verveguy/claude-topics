@@ -152,6 +152,9 @@ func cmdRestore(args []string) error {
 	}
 
 	if allProfiles {
+		if len(only) > 0 {
+			return fmt.Errorf("restore: name topics or use --all-profiles, not both — topic names belong to one profile")
+		}
 		var flags []string
 		if dry {
 			flags = append(flags, "--dry-run")

@@ -247,8 +247,10 @@ func cmdUp(args []string) error {
 		}
 	}
 
+	// restoreKey goes with any launch: cycle down's mark is for that one cycle, and a
+	// topic picked up since then has been handled by hand.
 	if err := cmdSet([]string{file, "name", name, "dir", dir, "sessionId", sid,
-		"state", "up", "lastPickedUp", nowISO()}); err != nil {
+		"state", "up", "lastPickedUp", nowISO(), restoreKey, ""}); err != nil {
 		return err
 	}
 	fmt.Println(upMessage(configDir, name))
@@ -273,9 +275,13 @@ func cmdDown(args []string) error {
 		// the name is free and `topic list` stops showing a window that does nothing.
 		if clearHusk(profileTag(configDir), name) {
 			fmt.Printf("%q had already exited; cleared its leftover tmux session.\n", name)
-			return cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()})
+			return cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO(), restoreKey, ""})
 		}
 		fmt.Printf("%q is already down.\n", name)
+		// Asking still says "keep it down": cycle up must not bring it back.
+		if regGet(topicsRoot, name, restoreKey) != "" {
+			return cmdSet([]string{topicFile(topicsRoot, name), restoreKey, ""})
+		}
 		return nil
 	}
 	fmt.Printf("Putting down %q…\n", name)
@@ -285,7 +291,8 @@ func cmdDown(args []string) error {
 		return err
 	}
 	stopSession(configDir, name)
-	if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO()}); err != nil {
+	// A deliberate down clears cycle down's mark; down-all --remember sets it again.
+	if err := cmdSet([]string{topicFile(topicsRoot, name), "state", "down", "lastPutDown", nowISO(), restoreKey, ""}); err != nil {
 		return err
 	}
 	fmt.Printf("%q is down. Session retained — `topic up %q` resumes it.\n", name, name)
