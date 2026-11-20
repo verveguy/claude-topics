@@ -119,6 +119,73 @@ Sessions started by a `topic` older than this have no such hook, so a topic you
 `/exit`ed from one of them looks crashed. Check `--dry-run` the first time, and
 `--discard` what should stay down.
 
+## Slack
+
+`topic slack` links Slack channels to topics, one channel each.
+
+### Setting it up
+
+1. `topic slack setup`, in the profile that should own the bridge. It creates the Slack home
+   (`<profile>/channels/slack/`), with an app manifest and a `.env` to fill in. It also
+   registers the `Slack Hub` daemon, which waits until the tokens are in.
+2. At <https://api.slack.com/apps>, choose *Create New App → From a manifest* and paste
+   `slack-app-manifest.yaml` from the Slack home. Install the app to the workspace.
+3. Fill in `.env`:
+   - `SLACK_BOT_TOKEN`: *OAuth & Permissions → Bot User OAuth Token* (`xoxb-…`).
+   - `SLACK_APP_TOKEN`: *Basic Information → App-Level Tokens*, scope `connections:write`
+     (`xapp-…`).
+   - `SLACK_ALLOWED_USERS`: Slack member IDs, comma-separated (*profile → ⋯ → Copy member ID*).
+4. Invite the bot to a channel. An allowed user can then run `/topics new <name>` or
+   `/topics link <name>` there, or you can run `topic slack link "<topic>" <channel link>`.
+
+Linking adds `server:slack` to the topic's claude args, and registers the shim in the
+topic's profile as a user-scope MCP server. A topic that was already running picks the
+channel up at its next launch (`/topics restart`).
+
+### In Slack
+
+| | |
+|---|---|
+| `/topics new <name> [dir] [--profile p]` | create a topic, link this channel, start it. `dir` defaults to `~/dev/.scratch/slack-topics/<name>`, and the profile to the hub's own |
+| `/topics link <name> [--profile p]` | link to an existing topic, found in whichever profile has it |
+| `/topics unlink` | stop routing this channel |
+| `/topics up` · `down` · `restart` · `status` · `help` | for this channel's topic |
+
+`--profile` takes what `topic move --to` takes: a tag (`kmba`), `default`, or a path. A slash
+command never appears in the channel, so it never reaches Claude: control and conversation
+stay apart. (Slack's built-in `/topic` sets a channel's description, hence the plural.)
+
+- **Messages to a topic that isn't listening** are held, up to 20 per channel. The channel is
+  told whether the topic is down (reply `up` to start it) or running without the channel (it
+  needs a relaunch). Held messages are delivered once the session can take them, marked
+  `held="true"`.
+- **Permission prompts** are posted with Allow and Deny buttons. Replying `yes <id>` or
+  `no <id>` also works.
+- **Receipts:** 👀 means delivered, 📥 held, ⏳ starting.
+
+### Trust
+
+A message to a topic is an instruction to a Claude session running as you, on your machine.
+So:
+
+- Only users in `SLACK_ALLOWED_USERS` reach a topic, run `/topics` or answer permission
+  prompts. Everyone else in the channel is ignored. Invites are answered only for allowed
+  inviters, and nothing is created until one of them runs `/topics new` or `/topics link`.
+- A topic's tools act on its own channel only. The hub holds the Slack tokens; sessions never
+  see them.
+- The hub's socket is `hub.sock` in the Slack home: mode 0600, in a 0700 directory.
+
+### How it works
+
+Socket Mode spreads an app's events across its open connections rather than copying them to
+each, so the hub is the only process connected to Slack. It routes by `links.json` and makes
+the Slack calls the topics ask for. The shim is a Claude Code channel. It is an MCP server
+over stdio, declaring `claude/channel` and `claude/channel/permission`. It finds its topic
+with `whoami`, retrying while a brand-new topic's registry entry is written, and registers
+with the hub. It lists no tools in a session whose topic has no channel. Inbound messages
+wait until claude has fetched the shim's tool list, because claude only accepts channel
+notifications after that.
+
 ## Adopting an existing session
 
 A session started outside `topic` can be brought under management. Every live
