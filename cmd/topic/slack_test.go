@@ -841,6 +841,39 @@ func TestDMAnswersReachTheTopicThatNotified(t *testing.T) {
 	}
 }
 
+func TestHubStateSurvivesARestart(t *testing.T) {
+	links := []slackLink{{Channel: "CA", Topic: "Alpha", ConfigDir: "/p", Mode: modeMention}, {Channel: "CB", Topic: "Beta", ConfigDir: "/p"}}
+	h, _ := newTestHub(t, links...)
+	h.botUser = "UBOT"
+	h.topicUp = func(slackLink) bool { return false }
+	now := fmt.Sprintf("%d.000100", time.Now().Unix())
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "<@UBOT> start", ts: now})
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "chatter", ts: "2.0"})
+	h.onMessage(slackMessage{channel: "CB", user: "UME", text: "while down", ts: "3.0"})
+	if _, err := h.runTool(topicKey("/p", "Alpha"), "notify", map[string]any{"text": "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	h.botThreads["CA/100.0"] = true // a thread from long ago: forgotten
+	if err := h.saveState(); err != nil {
+		t.Fatal(err)
+	}
+
+	h2 := newHub(h.home, slackConfig{allowed: h.allowed}, h.slack)
+	h2.botUser = "UBOT"
+	if !h2.botThreads["CA/"+now] || h2.botThreads["CA/100.0"] {
+		t.Errorf("bot threads = %v", h2.botThreads)
+	}
+	if q := h2.unsent["CA"]; len(q) != 1 || q[0].text != "chatter" {
+		t.Errorf("unsent = %+v", q)
+	}
+	if q := h2.held["CB"]; len(q) != 1 || q[0].Content != "while down" {
+		t.Errorf("held = %+v", q)
+	}
+	if h2.dmLast["DUME"] != topicKey("/p", "Alpha") || !h2.dmMayUse[topicKey("/p", "Alpha")+"|DUME"] {
+		t.Errorf("dm state = %v %v", h2.dmLast, h2.dmMayUse)
+	}
+}
+
 func TestTopicsModeAndStop(t *testing.T) {
 	h, _, profiles, _ := commandHub(t)
 	seedTopic(t, profiles[1], "Alpha")

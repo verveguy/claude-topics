@@ -249,6 +249,8 @@ type hub struct {
 	dmFrom   map[string]string
 	dmLast   map[string]string
 	dmMayUse map[string]bool
+
+	dirty chan struct{} // see changed
 }
 
 type memberCache struct {
@@ -268,6 +270,7 @@ func newHub(home string, cfg slackConfig, api slackAPI) *hub {
 		slackText: "connecting",
 		unsent:    map[string][]slackMessage{}, botThreads: map[string]bool{}, memberSet: map[string]memberCache{},
 		dmFrom: map[string]string{}, dmLast: map[string]string{}, dmMayUse: map[string]bool{},
+		dirty: make(chan struct{}, 1),
 	}
 	h.topicUp = func(l slackLink) bool { return isUp(profileTag(l.ConfigDir), l.Topic) }
 	h.runTopic = func(configDir string, args ...string) (string, error) {
@@ -289,6 +292,8 @@ func newHub(home string, cfg slackConfig, api slackAPI) *hub {
 		return tmuxCmd("send-keys", "-t", exactTarget(tmuxName(profileTag(l.ConfigDir), l.Topic)), "Escape").Run()
 	}
 	h.reloadLinks()
+	h.loadState()
+	go h.saveLoop()
 	return h
 }
 
@@ -442,6 +447,7 @@ func (h *hub) onMessage(m slackMessage) {
 	recent := time.Since(h.noticed[m.channel]) < 10*time.Minute
 	h.noticed[m.channel] = time.Now()
 	h.mu.Unlock()
+	h.changed()
 	_ = h.slack.react(m.channel, m.ts, "inbox_tray")
 	if recent {
 		return
@@ -640,6 +646,9 @@ func (h *hub) deliverHeld(channel string, s *shimConn) {
 	delete(h.held, channel)
 	delete(h.noticed, channel)
 	h.mu.Unlock()
+	if len(q) > 0 {
+		h.changed()
+	}
 	for _, w := range q {
 		w.Meta["held"] = "true"
 		if s.send(w) == nil {
@@ -730,6 +739,7 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 			h.mu.Lock()
 			h.botThreads[channel+"/"+t] = true
 			h.mu.Unlock()
+			h.changed()
 		}
 		var posted []string
 		for _, part := range splitForSlack(text) {
@@ -782,6 +792,7 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 			h.dmLast[ch] = key
 			h.dmMayUse[key+"|"+ch] = true
 			h.mu.Unlock()
+			h.changed()
 			sent = append(sent, u)
 		}
 		return fmt.Sprintf("sent to %d allowed user(s); their answers come back as DMs (dm=\"true\")", len(sent)), nil

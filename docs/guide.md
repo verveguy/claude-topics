@@ -186,6 +186,11 @@ with the hub. It lists no tools in a session whose topic has no channel. Inbound
 wait until claude has fetched the shim's tool list, because claude only accepts channel
 notifications after that.
 
+What the hub remembers about conversations is kept in `state.json` in the Slack home, so a
+restart loses none of it. That covers mention-mode catch-up not yet sent, the threads the bot
+is in, which topic sent each notify DM, and messages held for a topic that is not listening.
+Threads and DMs are forgotten 30 days after they started.
+
 ## Adopting an existing session
 
 A session started outside `topic` can be brought under management. Every live

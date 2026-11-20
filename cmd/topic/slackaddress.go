@@ -23,6 +23,7 @@ func (h *hub) addressed(m slackMessage) bool {
 			h.botThreads[m.channel+"/"+m.thread] = true
 		}
 		h.mu.Unlock()
+		h.changed()
 		return true
 	}
 	if m.thread == "" {
@@ -41,6 +42,7 @@ func (h *hub) remember(m slackMessage) {
 		q = q[len(q)-unsentLimit:]
 	}
 	h.unsent[m.channel] = q
+	h.changed()
 }
 
 // withCatchUp prefixes a message with everything said in the channel that Claude was
@@ -52,6 +54,7 @@ func (h *hub) withCatchUp(m slackMessage) string {
 	before := h.unsent[m.channel]
 	delete(h.unsent, m.channel)
 	h.mu.Unlock()
+	h.changed()
 	text := strings.TrimSpace(strings.ReplaceAll(m.text, "<@"+h.botUser+">", ""))
 	if len(before) == 0 {
 		return text
