@@ -43,29 +43,59 @@ func (h *hub) remember(m slackMessage) {
 	h.unsent[m.channel] = q
 }
 
-// withCatchUp prefixes a message with what was said in the same place (its thread, or
-// the channel's top level) that Claude was not sent, and forgets those lines. Claude
-// follows the conversation without being woken for every message of it.
+// withCatchUp prefixes a message with everything said in the channel that Claude was
+// not sent, grouped by where it was said (the channel's top level, or each thread),
+// and forgets those lines. Claude follows the whole channel, threads included,
+// without being woken for every message of it.
 func (h *hub) withCatchUp(m slackMessage) string {
 	h.mu.Lock()
-	var before, kept []slackMessage
-	for _, u := range h.unsent[m.channel] {
-		if u.thread == m.thread || (m.thread != "" && u.ts == m.thread) {
-			before = append(before, u)
-		} else {
-			kept = append(kept, u)
-		}
-	}
-	h.unsent[m.channel] = kept
+	before := h.unsent[m.channel]
+	delete(h.unsent, m.channel)
 	h.mu.Unlock()
 	text := strings.TrimSpace(strings.ReplaceAll(m.text, "<@"+h.botUser+">", ""))
 	if len(before) == 0 {
 		return text
 	}
-	var b strings.Builder
-	b.WriteString("[Said here since you last heard from this conversation:]\n")
+	// A top-level message that others answered in a thread belongs with its thread.
+	parents := map[string]bool{}
 	for _, u := range before {
-		fmt.Fprintf(&b, "%s: %s\n", h.slack.userName(u.user), u.text)
+		if u.thread != "" {
+			parents[u.thread] = true
+		}
+	}
+	place := func(u slackMessage) string {
+		if u.thread != "" {
+			return u.thread
+		}
+		if parents[u.ts] {
+			return u.ts
+		}
+		return ""
+	}
+	var order []string
+	groups := map[string][]slackMessage{}
+	for _, u := range before {
+		k := place(u)
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], u)
+	}
+	var b strings.Builder
+	b.WriteString("[Said in this channel since you last heard from it:]\n")
+	for _, k := range order {
+		here := ""
+		if k == m.thread {
+			here = " (where the message for you was posted)"
+		}
+		if k == "" {
+			fmt.Fprintf(&b, "In the channel%s:\n", here)
+		} else {
+			fmt.Fprintf(&b, "In the thread thread_ts=%s%s:\n", k, here)
+		}
+		for _, u := range groups[k] {
+			fmt.Fprintf(&b, "  [ts=%s] %s: %s\n", u.ts, h.slack.userName(u.user), u.text)
+		}
 	}
 	b.WriteString("[The message for you:]\n")
 	b.WriteString(text)

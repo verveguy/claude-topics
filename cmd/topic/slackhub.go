@@ -59,7 +59,7 @@ type slackAPI interface {
 	userName(id string) string
 	canRead(channel string) error
 	members(channel string) ([]string, error)
-	dm(user, text string) error
+	dm(user, text string) (channel, ts string, err error)
 }
 
 type realSlack struct {
@@ -160,16 +160,16 @@ func (r *realSlack) members(channel string) ([]string, error) {
 	}
 }
 
-func (r *realSlack) dm(user, text string) error {
+func (r *realSlack) dm(user, text string) (string, string, error) {
 	ch, _, _, err := r.api.OpenConversation(&slack.OpenConversationParameters{Users: []string{user}})
 	if err != nil {
 		if strings.Contains(err.Error(), "missing_scope") {
-			return errors.New("the Slack app lacks the im:write scope: update its manifest and reinstall it")
+			return "", "", errors.New("the Slack app lacks the im:write scope: update its manifest and reinstall it")
 		}
-		return err
+		return "", "", err
 	}
-	_, _, err = r.api.PostMessage(ch.ID, slack.MsgOptionText(text, false))
-	return err
+	_, ts, err := r.api.PostMessage(ch.ID, slack.MsgOptionText(text, false))
+	return ch.ID, ts, err
 }
 
 // canRead checks the bot can see a channel before it is linked: the usual miss is a
@@ -242,6 +242,13 @@ type hub struct {
 	unsent     map[string][]slackMessage
 	botThreads map[string]bool
 	memberSet  map[string]memberCache
+
+	// Direct messages: notify's DM (channel/ts) and the topic that sent it, the topic
+	// that last notified in each DM channel, and the DM channels each topic may answer
+	// in ("key|channel").
+	dmFrom   map[string]string
+	dmLast   map[string]string
+	dmMayUse map[string]bool
 }
 
 type memberCache struct {
@@ -260,6 +267,7 @@ func newHub(home string, cfg slackConfig, api slackAPI) *hub {
 		held: map[string][]hubWire{}, noticed: map[string]time.Time{}, starting: map[string]bool{},
 		slackText: "connecting",
 		unsent:    map[string][]slackMessage{}, botThreads: map[string]bool{}, memberSet: map[string]memberCache{},
+		dmFrom: map[string]string{}, dmLast: map[string]string{}, dmMayUse: map[string]bool{},
 	}
 	h.topicUp = func(l slackLink) bool { return isUp(profileTag(l.ConfigDir), l.Topic) }
 	h.runTopic = func(configDir string, args ...string) (string, error) {
@@ -373,6 +381,10 @@ func (h *hub) onMessage(m slackMessage) {
 	if !h.allowed[m.user] {
 		return
 	}
+	if strings.HasPrefix(m.channel, "D") {
+		h.onDM(m)
+		return
+	}
 	link, ok := h.linkForChannel(m.channel)
 	if !ok {
 		h.promptUnlinked(m.channel, m.thread, false)
@@ -444,6 +456,36 @@ func (h *hub) onMessage(m slackMessage) {
 	}
 	if _, err := h.slack.post(m.channel, m.thread, notice, nil); err != nil {
 		h.log("posting to %s: %v", m.channel, err)
+	}
+}
+
+// onDM passes a direct message to the topic it answers: the one whose notify it is a
+// thread reply to, or else the one that last notified in this DM.
+func (h *hub) onDM(m slackMessage) {
+	h.mu.Lock()
+	key := h.dmLast[m.channel]
+	if k, ok := h.dmFrom[m.channel+"/"+m.thread]; ok && m.thread != "" {
+		key = k
+	}
+	s := h.shims[key]
+	h.mu.Unlock()
+	if key == "" {
+		_, _ = h.slack.post(m.channel, m.thread, "I pass a DM on to the topic that last notified you here, and none has yet. "+
+			"Talk to a topic in its channel.", nil)
+		return
+	}
+	channel := h.channelForKey(key)
+	link, _ := h.linkForChannel(channel)
+	if s == nil {
+		_, _ = h.slack.post(m.channel, m.thread, fmt.Sprintf("*%s* is not listening right now. Try it in <#%s>.", link.Topic, channel), nil)
+		return
+	}
+	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user, "dm": "true"}
+	if m.thread != "" {
+		meta["thread_ts"] = m.thread
+	}
+	if s.send(hubWire{Type: "inbound", Content: m.text, Meta: meta}) == nil {
+		_ = h.slack.react(m.channel, m.ts, "eyes")
 	}
 }
 
@@ -667,6 +709,16 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 		return "", errors.New("this topic is not linked to a Slack channel (topic slack link)")
 	}
 	str := func(k string) string { s, _ := args[k].(string); return s }
+	// A topic may answer in a DM it notified in, and nowhere else but its channel.
+	if c := str("channel"); c != "" && c != channel {
+		h.mu.Lock()
+		ok := h.dmMayUse[key+"|"+c]
+		h.mu.Unlock()
+		if !ok {
+			return "", fmt.Errorf("this topic can post only in its own channel or a DM it sent with notify, not %s", c)
+		}
+		channel = c
+	}
 	switch tool {
 	case "reply":
 		text := str("text")
@@ -721,12 +773,18 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 		msg := fmt.Sprintf("From *%s* (<#%s>): %s", link.Topic, channel, text)
 		var sent []string
 		for u := range h.allowed {
-			if err := h.slack.dm(u, msg); err != nil {
+			ch, ts, err := h.slack.dm(u, msg)
+			if err != nil {
 				return "", err
 			}
+			h.mu.Lock()
+			h.dmFrom[ch+"/"+ts] = key
+			h.dmLast[ch] = key
+			h.dmMayUse[key+"|"+ch] = true
+			h.mu.Unlock()
 			sent = append(sent, u)
 		}
-		return fmt.Sprintf("sent to %d allowed user(s)", len(sent)), nil
+		return fmt.Sprintf("sent to %d allowed user(s); their answers come back as DMs (dm=\"true\")", len(sent)), nil
 	case "read_history":
 		limit := 20
 		if f, ok := args["limit"].(float64); ok && f >= 1 {

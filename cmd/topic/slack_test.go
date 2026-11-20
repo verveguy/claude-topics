@@ -720,11 +720,12 @@ func TestShimHoldsMessagesUntilClaudeCanTakeThem(t *testing.T) {
 }
 
 func (f *fakeSlack) members(string) ([]string, error) { return []string{"UME", "UPAL", "UBOT"}, nil }
-func (f *fakeSlack) dm(user, text string) error {
+func (f *fakeSlack) dm(user, text string) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.n++
 	f.posts = append(f.posts, fakePost{channel: "DM:" + user, text: text})
-	return nil
+	return "D" + user, fmt.Sprintf("900.%d", f.n), nil
 }
 
 // ---- addressing, catch-up, mentions --------------------------------------------------
@@ -752,9 +753,10 @@ func TestMentionModeSendsOnlyWhatIsAddressedWithCatchUp(t *testing.T) {
 
 	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "<@UBOT> what do you think?", ts: "1.2"})
 	w := a.next(t)
-	if !strings.Contains(w.Content, "name-UME: shall we ship friday?") || !strings.HasSuffix(w.Content, "what do you think?") ||
-		strings.Contains(w.Content, "<@UBOT>") || strings.Contains(w.Content, "side thread") {
-		t.Fatalf("addressed message = %q, want this conversation's catch-up and the message, without the mention", w.Content)
+	if !strings.Contains(w.Content, "In the channel (where the message for you was posted):\n  [ts=1.1] name-UME: shall we ship friday?") ||
+		!strings.Contains(w.Content, "In the thread thread_ts=0.9:\n  [ts=1.3] name-UME: side thread") ||
+		!strings.HasSuffix(w.Content, "what do you think?") || strings.Contains(w.Content, "<@UBOT>") {
+		t.Fatalf("addressed message = %q, want the channel's catch-up, threads included, and the message, without the mention", w.Content)
 	}
 
 	// Once addressed, its thread is a conversation with the bot: no mention needed.
@@ -762,9 +764,9 @@ func TestMentionModeSendsOnlyWhatIsAddressedWithCatchUp(t *testing.T) {
 	if w := a.next(t); w.Content != "and saturday?" {
 		t.Fatalf("thread reply = %q", w.Content)
 	}
-	// The catch-up was spent; only the other thread's line is still waiting.
-	if n := len(h.unsent["CA"]); n != 1 {
-		t.Errorf("%d unsent lines left, want the side thread's 1", n)
+	// The catch-up was spent.
+	if n := len(h.unsent["CA"]); n != 0 {
+		t.Errorf("%d unsent lines left, want none", n)
 	}
 }
 
@@ -785,6 +787,57 @@ func TestNotifyMessagesTheOwnersOnly(t *testing.T) {
 	p, _, _ := fake.snapshot()
 	if len(p) != 1 || p[0].channel != "DM:UME" || !strings.Contains(p[0].text, "*Alpha*") || !strings.Contains(p[0].text, "build is green") {
 		t.Fatalf("posts = %+v, want one DM to the allowed user", p)
+	}
+}
+
+func TestDMAnswersReachTheTopicThatNotified(t *testing.T) {
+	h, fake := newTestHub(t, slackLink{Channel: "CA", Topic: "Alpha", ConfigDir: "/p"}, slackLink{Channel: "CB", Topic: "Beta", ConfigDir: "/p"})
+	a := connectShim(t, h, "Alpha", "/p")
+	a.next(t)
+	b := connectShim(t, h, "Beta", "/p")
+	b.next(t)
+
+	h.onMessage(slackMessage{channel: "DUME", user: "UME", text: "hello?", ts: "1.0"})
+	if p, _, _ := fake.snapshot(); !strings.Contains(p[len(p)-1].text, "none has yet") {
+		t.Fatalf("DM before any notify: %+v", p)
+	}
+
+	alpha, beta := topicKey("/p", "Alpha"), topicKey("/p", "Beta")
+	if _, err := h.runTool(alpha, "notify", map[string]any{"text": "need a decision"}); err != nil {
+		t.Fatal(err)
+	}
+	alphaTS := "900.2"
+	if _, err := h.runTool(beta, "notify", map[string]any{"text": "done"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A thread reply goes to whoever sent that notify; a top-level DM to the latest.
+	h.onMessage(slackMessage{channel: "DUME", user: "UME", text: "go with plan B", ts: "2.0", thread: alphaTS})
+	if w := a.next(t); w.Content != "go with plan B" || w.Meta["dm"] != "true" || w.Meta["channel"] != "DUME" {
+		t.Fatalf("Alpha got %+v", w)
+	}
+	h.onMessage(slackMessage{channel: "DUME", user: "UME", text: "thanks", ts: "3.0"})
+	if w := b.next(t); w.Content != "thanks" {
+		t.Fatalf("Beta got %+v", w)
+	}
+	h.onMessage(slackMessage{channel: "DUPAL", user: "UPAL", text: "let me in", ts: "4.0"})
+	select {
+	case w := <-a.in:
+		t.Fatalf("a stranger's DM reached Alpha: %+v", w)
+	case w := <-b.in:
+		t.Fatalf("a stranger's DM reached Beta: %+v", w)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Each topic answers in the DM, and only in DMs it notified in.
+	if _, err := h.runTool(alpha, "reply", map[string]any{"text": "ok", "channel": "DUME", "thread_ts": alphaTS}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := fake.snapshot(); p[len(p)-1].channel != "DUME" || p[len(p)-1].text != "ok" {
+		t.Fatalf("reply = %+v", p[len(p)-1])
+	}
+	if _, err := h.runTool(alpha, "reply", map[string]any{"text": "x", "channel": "CB"}); err == nil {
+		t.Fatal("Alpha posted in Beta's channel")
 	}
 }
 

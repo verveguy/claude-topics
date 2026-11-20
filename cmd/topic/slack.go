@@ -312,6 +312,10 @@ features:
       description: Create, link and manage the topic behind this channel
       usage_hint: "new <name> [dir] [--profile p] | link <name> | unlink | up | down | restart | status"
       should_escape: false
+  app_home:                # lets you answer notify's DMs
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
 oauth_config:
   scopes:
     bot:
@@ -321,6 +325,7 @@ oauth_config:
       - groups:read
       - chat:write
       - commands           # /topics
+      - im:history         # answers to those DMs
       - im:write           # notify: a DM to the allowed users
       - reactions:write
       - users:read
@@ -329,6 +334,7 @@ settings:
     bot_events:
       - message.channels
       - message.groups
+      - message.im
       - member_joined_channel
   interactivity:
     is_enabled: true
