@@ -940,6 +940,33 @@ func TestTeamModeHearsEveryoneAndTrustIsPerChannel(t *testing.T) {
 	_ = fake
 }
 
+func TestListenModeSendsEverythingMarkedWithWhetherItWasAddressed(t *testing.T) {
+	h, fake := newTestHub(t, slackLink{Channel: "CA", Topic: "Alpha", ConfigDir: "/p", Mode: modeListen})
+	h.botUser = "UBOT"
+	h.topicUp = func(slackLink) bool { return false }
+	h.onMessage(slackMessage{channel: "CA", user: "UPAL", text: "said while it was down", ts: "1.0"})
+	if _, r, _ := fake.snapshot(); len(r) != 0 {
+		t.Fatalf("overheard while down: reacted %q", r)
+	}
+
+	a := connectShim(t, h, "Alpha", "/p")
+	a.next(t)
+	h.onMessage(slackMessage{channel: "CA", user: "UPAL", text: "the cache is slow", ts: "2.0"})
+	w := a.next(t)
+	if w.Content != "the cache is slow" || w.Meta["addressed"] != "false" || w.Meta["directs"] != "false" {
+		t.Fatalf("overheard = %+v", w)
+	}
+	if _, r, _ := fake.snapshot(); len(r) != 0 {
+		t.Errorf("receipts on overheard messages: %q", r)
+	}
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "<@UBOT> look into it", ts: "3.0"})
+	w = a.next(t)
+	if w.Meta["addressed"] != "true" || w.Meta["directs"] != "true" ||
+		!strings.Contains(w.Content, "said while it was down") || !strings.HasSuffix(w.Content, "look into it") {
+		t.Fatalf("addressed = %+v, want the catch-up from while it was down", w)
+	}
+}
+
 func TestTopicsModeAndStop(t *testing.T) {
 	h, _, profiles, _ := commandHub(t)
 	seedTopic(t, profiles[1], "Alpha")

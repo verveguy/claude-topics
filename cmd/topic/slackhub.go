@@ -399,7 +399,7 @@ func (h *hub) onMessage(m slackMessage) {
 	}
 	// Outside team mode the topic hears only the people it takes direction from.
 	directs := h.directs(link, m.user)
-	if !directs && link.Mode != modeTeam {
+	if !directs && link.Mode != modeTeam && link.Mode != modeListen {
 		return
 	}
 	if r := permissionReply.FindStringSubmatch(m.text); r != nil && h.allowed[m.user] {
@@ -417,16 +417,22 @@ func (h *hub) onMessage(m slackMessage) {
 	// In mention mode a bare `up` still starts a topic that is not listening; to a
 	// running one it is just chatter.
 	isUp := directs && strings.EqualFold(strings.TrimSpace(m.text), "up")
-	if (link.Mode == modeMention || link.Mode == modeTeam) && !(isUp && !listening) {
-		if !h.addressed(m) {
+	addressed := true
+	if link.Mode != "" && !(isUp && !listening) {
+		addressed = h.addressed(m)
+		switch {
+		case addressed:
+			content = h.withCatchUp(link, m)
+		case link.Mode == modeListen && listening:
+			// Listen mode passes everything on as it is said, quietly: no receipt.
+		default:
 			h.remember(m)
 			return
 		}
-		content = h.withCatchUp(link, m)
 	}
 
 	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user,
-		"directs": strconv.FormatBool(directs)}
+		"directs": strconv.FormatBool(directs), "addressed": strconv.FormatBool(addressed)}
 	if m.thread != "" {
 		meta["thread_ts"] = m.thread
 	}
@@ -436,7 +442,13 @@ func (h *hub) onMessage(m slackMessage) {
 	s := h.shims[link.key()]
 	h.mu.Unlock()
 	if s != nil && s.send(w) == nil {
-		_ = h.slack.react(m.channel, m.ts, "eyes")
+		if addressed {
+			_ = h.slack.react(m.channel, m.ts, "eyes")
+		}
+		return
+	}
+	if !addressed { // overheard while the topic went away: keep it as catch-up
+		h.remember(m)
 		return
 	}
 

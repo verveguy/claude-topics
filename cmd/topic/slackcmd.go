@@ -26,8 +26,9 @@ const slackCommandHelp = "`/topics new <name> [dir] [--profile p]`  create a top
 	"`/topics unlink`  stop routing this channel\n" +
 	"`/topics up` · `down` · `restart`  this channel's topic\n" +
 	"`/topics stop`  interrupt what it is doing right now\n" +
-	"`/topics mode all|mention|team`  `all`: every message goes to it; `mention`: only messages that @mention the bot, and threads it is in; " +
-	"`team`: as mention, but it hears everyone in the channel and acts only for those it takes direction from\n" +
+	"`/topics mode all|mention|team|listen`  `all`: every message goes to it; `mention`: only messages that @mention the bot, and threads it is in; " +
+	"`team`: as mention, but it hears everyone in the channel and acts only for those it takes direction from; " +
+	"`listen`: as team, but it is sent every message as it is posted and may join in\n" +
 	"`/topics trust @someone…` · `untrust @someone…`  who else it takes direction from, in this channel only\n" +
 	"`/topics status`  what this channel is linked to\n" +
 	"Profiles are named as for `topic move --to`: a tag such as `kmba`, `default`, or a path. " +
@@ -194,6 +195,8 @@ func (h *hub) onCommand(user, channel, text string) string {
 			mode = "only @mentions and its threads go to it"
 		case modeTeam:
 			mode = "team mode: it hears everyone, and @mentions and its threads wake it"
+		case modeListen:
+			mode = "listen mode: it is sent everything said here, and may join in"
 		}
 		trusted := "only allowed users direct it"
 		if len(link.Trusted) > 0 {
@@ -215,14 +218,20 @@ func (h *hub) onCommand(user, channel, text string) string {
 			mode = modeMention
 		case "team":
 			mode = modeTeam
+		case "listen":
+			mode = modeListen
 		default:
-			return "`/topics mode all` (every message goes to the topic), `/topics mode mention` (only @mentions and its threads) or `/topics mode team` (as mention, hearing everyone)"
+			return "`/topics mode all` (every message goes to the topic), `/topics mode mention` (only @mentions and its threads), " +
+				"`/topics mode team` (as mention, hearing everyone) or `/topics mode listen` (as team, sent every message as it is posted)"
 		}
 		if err := updateLink(h.home, channel, func(l *slackLink) { l.Mode = mode }); err != nil {
 			return err.Error()
 		}
 		h.reloadLinks()
-		if mode == modeTeam {
+		if mode == modeListen {
+			h.say(channel, fmt.Sprintf("<@%s> set this channel to listen mode: *%s* is sent everything said here as it is posted, and may join in when it has something useful to add. "+
+				"It acts only when someone it takes direction from @mentions <@%s> or replies in its threads (`/topics trust @someone`).", user, link.Topic, h.botUser))
+		} else if mode == modeTeam {
 			h.say(channel, fmt.Sprintf("<@%s> set this channel to team mode: *%s* follows everything said here, and answers when someone @mentions <@%s> or replies in its threads. "+
 				"It acts only for people it takes direction from (`/topics trust @someone`); with anyone else it just talks.", user, link.Topic, h.botUser))
 		} else if mode == modeMention {

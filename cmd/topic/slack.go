@@ -129,7 +129,8 @@ type slackLink struct {
 	// can direct it goes to it), modeMention (only their messages that mention the bot,
 	// and replies in threads it takes part in; the rest arrives as catch-up context) or
 	// modeTeam (as mention, but everyone in the channel is heard, labelled with whether
-	// they can direct the topic).
+	// they can direct the topic) or modeListen (as team, but every message is sent as
+	// it is posted, marked with whether it was addressed to the bot).
 	Mode string `json:"mode,omitempty"`
 	// Trusted are the Slack users, besides the allowed users, that the topic takes
 	// direction from in this channel. Only an allowed user can change it.
@@ -139,6 +140,7 @@ type slackLink struct {
 const (
 	modeMention = "mention"
 	modeTeam    = "team"
+	modeListen  = "listen"
 )
 
 func (l slackLink) key() string { return topicKey(l.ConfigDir, l.Topic) }

@@ -151,7 +151,7 @@ channel up at its next launch (`/topics restart`).
 | `/topics unlink` | stop routing this channel |
 | `/topics up` · `down` · `restart` · `status` · `help` | for this channel's topic |
 | `/topics stop` | interrupt what the topic is doing (Escape in its session) |
-| `/topics mode all\|mention\|team` | how the channel addresses the topic: see below |
+| `/topics mode all\|mention\|team\|listen` | how the channel addresses the topic: see below |
 | `/topics trust @someone…` · `untrust @someone…` | who else the topic takes direction from, in this channel only |
 
 `--profile` takes what `topic move --to` takes: a tag (`kmba`), `default`, or a path. A slash
@@ -179,6 +179,10 @@ stay apart. (Slack's built-in `/topic` sets a channel's description, hence the p
   message is labelled with its sender and whether the topic takes direction from them. It acts
   only for those who can direct it. With anyone else it talks: it answers, asks clarifying
   questions and discusses, but does no work for them.
+- **`listen`**: as `team`, but the topic is sent every message as it is posted, marked
+  `addressed="false"` unless it @mentions the bot or is in its threads. It is told to stay quiet
+  unless it has something clearly useful to add, and never to act on what it overhears. Each
+  message is a Claude turn, so this costs more. Overheard messages get no 👀.
 
 The topic takes direction from the allowed users, and in each channel from whoever an allowed
 user has named with `/topics trust`. Trusting someone in one channel gives them nothing in
