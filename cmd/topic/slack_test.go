@@ -450,8 +450,8 @@ func TestShimSpeaksChannelMCP(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	hh.rpc(t, 2, "tools/list", nil)
 	tools := hh.next(t)["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 4 {
-		t.Fatalf("a linked topic lists %d tools, want 4", len(tools))
+	if len(tools) != len(slackTools) {
+		t.Fatalf("a linked topic lists %d tools, want %d", len(tools), len(slackTools))
 	}
 
 	hh.fromHub(t, hubWire{Type: "inbound", Content: "hello", Meta: map[string]string{"ts": "1.1"}})
@@ -716,5 +716,108 @@ func TestShimHoldsMessagesUntilClaudeCanTakeThem(t *testing.T) {
 	}
 	if n := hh.next(t); n["method"] != "notifications/claude/channel" || n["params"].(map[string]any)["content"] != "said while down" {
 		t.Fatalf("after tools/list: %v", n)
+	}
+}
+
+func (f *fakeSlack) members(string) ([]string, error) { return []string{"UME", "UPAL", "UBOT"}, nil }
+func (f *fakeSlack) dm(user, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.posts = append(f.posts, fakePost{channel: "DM:" + user, text: text})
+	return nil
+}
+
+// ---- addressing, catch-up, mentions --------------------------------------------------
+
+func TestMentionModeSendsOnlyWhatIsAddressedWithCatchUp(t *testing.T) {
+	h, fake := newTestHub(t, slackLink{Channel: "CA", Topic: "Alpha", ConfigDir: "/p", Mode: modeMention})
+	h.botUser = "UBOT"
+	a := connectShim(t, h, "Alpha", "/p")
+	a.next(t)
+	quiet := func(why string) {
+		t.Helper()
+		select {
+		case w := <-a.in:
+			t.Fatalf("%s reached the topic: %+v", why, w)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "shall we ship friday?", ts: "1.1"})
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "side thread", ts: "1.3", thread: "0.9"})
+	quiet("an unaddressed message")
+	if _, r, _ := fake.snapshot(); len(r) != 0 {
+		t.Errorf("reacted to unaddressed messages: %q", r)
+	}
+
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "<@UBOT> what do you think?", ts: "1.2"})
+	w := a.next(t)
+	if !strings.Contains(w.Content, "name-UME: shall we ship friday?") || !strings.HasSuffix(w.Content, "what do you think?") ||
+		strings.Contains(w.Content, "<@UBOT>") || strings.Contains(w.Content, "side thread") {
+		t.Fatalf("addressed message = %q, want this conversation's catch-up and the message, without the mention", w.Content)
+	}
+
+	// Once addressed, its thread is a conversation with the bot: no mention needed.
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "and saturday?", ts: "1.4", thread: "1.2"})
+	if w := a.next(t); w.Content != "and saturday?" {
+		t.Fatalf("thread reply = %q", w.Content)
+	}
+	// The catch-up was spent; only the other thread's line is still waiting.
+	if n := len(h.unsent["CA"]); n != 1 {
+		t.Errorf("%d unsent lines left, want the side thread's 1", n)
+	}
+}
+
+func TestLimitMentions(t *testing.T) {
+	h, _ := newTestHub(t)
+	got := h.limitMentions("CA", "<!channel> <!here|here> hi <@UPAL>, <@USTRANGER> and <!subteam^S123|@eng>")
+	want := "@channel @here hi <@UPAL>, name-USTRANGER and @eng"
+	if got != want {
+		t.Fatalf("limitMentions = %q\nwant %q", got, want)
+	}
+}
+
+func TestNotifyMessagesTheOwnersOnly(t *testing.T) {
+	h, fake := newTestHub(t, slackLink{Channel: "CA", Topic: "Alpha", ConfigDir: "/p"})
+	if _, err := h.runTool(topicKey("/p", "Alpha"), "notify", map[string]any{"text": "build is green"}); err != nil {
+		t.Fatal(err)
+	}
+	p, _, _ := fake.snapshot()
+	if len(p) != 1 || p[0].channel != "DM:UME" || !strings.Contains(p[0].text, "*Alpha*") || !strings.Contains(p[0].text, "build is green") {
+		t.Fatalf("posts = %+v, want one DM to the allowed user", p)
+	}
+}
+
+func TestTopicsModeAndStop(t *testing.T) {
+	h, _, profiles, _ := commandHub(t)
+	seedTopic(t, profiles[1], "Alpha")
+	if r := h.onCommand("UME", "CA", "link Alpha"); r != "Linked." {
+		t.Fatalf("link: %q", r)
+	}
+	if r := h.onCommand("UME", "CA", "mode mention"); r != "Done." {
+		t.Fatalf("mode: %q", r)
+	}
+	if l, _ := h.linkForChannel("CA"); l.Mode != modeMention {
+		t.Fatalf("mode = %q", l.Mode)
+	}
+	if r := h.onCommand("UME", "CA", "status"); !strings.Contains(r, "only @mentions") {
+		t.Errorf("status = %q", r)
+	}
+	if r := h.onCommand("UME", "CA", "mode sometimes"); !strings.Contains(r, "/topics mode all") {
+		t.Errorf("bad mode: %q", r)
+	}
+	h.onCommand("UME", "CA", "mode all")
+	if l, _ := h.linkForChannel("CA"); l.Mode != "" {
+		t.Fatalf("mode = %q after mode all", l.Mode)
+	}
+
+	interrupted := ""
+	h.interrupt = func(l slackLink) error { interrupted = l.Topic; return nil }
+	if r := h.onCommand("UME", "CA", "stop"); !strings.Contains(r, "not running") || interrupted != "" {
+		t.Fatalf("stop on a down topic: %q, interrupted %q", r, interrupted)
+	}
+	h.topicUp = func(slackLink) bool { return true }
+	if r := h.onCommand("UME", "CA", "stop"); r != "Stopped." || interrupted != "Alpha" {
+		t.Fatalf("stop: %q, interrupted %q", r, interrupted)
 	}
 }

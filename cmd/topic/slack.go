@@ -125,7 +125,13 @@ type slackLink struct {
 	Channel   string `json:"channel"`
 	Topic     string `json:"topic"`
 	ConfigDir string `json:"configDir"`
+	// Mode is how the channel addresses its topic: "" (every message from an allowed
+	// user goes to it) or modeMention (only messages that mention the bot, and replies
+	// in threads it takes part in; the rest arrives as catch-up context).
+	Mode string `json:"mode,omitempty"`
 }
+
+const modeMention = "mention"
 
 func (l slackLink) key() string { return topicKey(l.ConfigDir, l.Topic) }
 
@@ -315,6 +321,7 @@ oauth_config:
       - groups:read
       - chat:write
       - commands           # /topics
+      - im:write           # notify: a DM to the allowed users
       - reactions:write
       - users:read
 settings:

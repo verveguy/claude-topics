@@ -58,6 +58,8 @@ type slackAPI interface {
 	history(channel, thread string, limit int) ([]slack.Message, error)
 	userName(id string) string
 	canRead(channel string) error
+	members(channel string) ([]string, error)
+	dm(user, text string) error
 }
 
 type realSlack struct {
@@ -142,6 +144,34 @@ func (r *realSlack) userName(id string) string {
 	return n
 }
 
+func (r *realSlack) members(channel string) ([]string, error) {
+	var all []string
+	cursor := ""
+	for {
+		ids, next, err := r.api.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: channel, Cursor: cursor, Limit: 200})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, ids...)
+		if next == "" {
+			return all, nil
+		}
+		cursor = next
+	}
+}
+
+func (r *realSlack) dm(user, text string) error {
+	ch, _, _, err := r.api.OpenConversation(&slack.OpenConversationParameters{Users: []string{user}})
+	if err != nil {
+		if strings.Contains(err.Error(), "missing_scope") {
+			return errors.New("the Slack app lacks the im:write scope: update its manifest and reinstall it")
+		}
+		return err
+	}
+	_, _, err = r.api.PostMessage(ch.ID, slack.MsgOptionText(text, false))
+	return err
+}
+
 // canRead checks the bot can see a channel before it is linked: the usual miss is a
 // private channel nobody invited it to, which Slack reports as not found.
 func (r *realSlack) canRead(channel string) error {
@@ -195,6 +225,7 @@ type hub struct {
 	startTopic func(l slackLink) error
 	runTopic   func(configDir string, args ...string) (string, error)
 	profiles   func() []string
+	interrupt  func(l slackLink) error // Escape into the topic's pane
 
 	mu        sync.Mutex
 	links     []slackLink
@@ -205,6 +236,17 @@ type hub struct {
 	noticed   map[string]time.Time          // by channel: when we last said it was not listening
 	starting  map[string]bool               // by topic key
 	slackText string                        // connection state, for status
+
+	// For channels in mention mode: what was said that Claude was not sent, by
+	// channel, and the threads it takes part in (channel/thread_ts).
+	unsent     map[string][]slackMessage
+	botThreads map[string]bool
+	memberSet  map[string]memberCache
+}
+
+type memberCache struct {
+	ids     map[string]bool
+	fetched time.Time
 }
 
 // heldLimit bounds the messages kept for a topic that is not listening.
@@ -217,6 +259,7 @@ func newHub(home string, cfg slackConfig, api slackAPI) *hub {
 		shims: map[string]*shimConn{}, pending: map[string]*pendingPermission{},
 		held: map[string][]hubWire{}, noticed: map[string]time.Time{}, starting: map[string]bool{},
 		slackText: "connecting",
+		unsent:    map[string][]slackMessage{}, botThreads: map[string]bool{}, memberSet: map[string]memberCache{},
 	}
 	h.topicUp = func(l slackLink) bool { return isUp(profileTag(l.ConfigDir), l.Topic) }
 	h.runTopic = func(configDir string, args ...string) (string, error) {
@@ -234,6 +277,9 @@ func newHub(home string, cfg slackConfig, api slackAPI) *hub {
 	}
 	h.startTopic = func(l slackLink) error { _, err := h.runTopic(l.ConfigDir, "up", l.Topic); return err }
 	h.profiles = listProfiles
+	h.interrupt = func(l slackLink) error {
+		return tmuxCmd("send-keys", "-t", exactTarget(tmuxName(profileTag(l.ConfigDir), l.Topic)), "Escape").Run()
+	}
 	h.reloadLinks()
 	return h
 }
@@ -340,11 +386,26 @@ func (h *hub) onMessage(m slackMessage) {
 		}
 	}
 
+	h.mu.Lock()
+	listening := h.shims[link.key()] != nil
+	h.mu.Unlock()
+	content := m.text
+	// In mention mode a bare `up` still starts a topic that is not listening; to a
+	// running one it is just chatter.
+	isUp := strings.EqualFold(strings.TrimSpace(m.text), "up")
+	if link.Mode == modeMention && !(isUp && !listening) {
+		if !h.addressed(m) {
+			h.remember(m)
+			return
+		}
+		content = h.withCatchUp(m)
+	}
+
 	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user}
 	if m.thread != "" {
 		meta["thread_ts"] = m.thread
 	}
-	w := hubWire{Type: "inbound", Content: m.text, Meta: meta}
+	w := hubWire{Type: "inbound", Content: content, Meta: meta}
 
 	h.mu.Lock()
 	s := h.shims[link.key()]
@@ -612,6 +673,12 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 		if text == "" {
 			return "", errors.New("text is required")
 		}
+		text = h.limitMentions(channel, text)
+		if t := str("thread_ts"); t != "" {
+			h.mu.Lock()
+			h.botThreads[channel+"/"+t] = true
+			h.mu.Unlock()
+		}
 		var posted []string
 		for _, part := range splitForSlack(text) {
 			ts, err := h.slack.post(channel, str("thread_ts"), part, nil)
@@ -625,13 +692,41 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 		if str("ts") == "" || str("text") == "" {
 			return "", errors.New("ts and text are required")
 		}
-		return "edited", h.slack.update(channel, str("ts"), str("text"), nil)
+		return "edited", h.slack.update(channel, str("ts"), h.limitMentions(channel, str("text")), nil)
 	case "react":
 		name := strings.Trim(str("name"), ":")
 		if str("ts") == "" || name == "" {
 			return "", errors.New("ts and name are required")
 		}
 		return "reacted", h.slack.react(channel, str("ts"), name)
+	case "channel_members":
+		ids, err := h.slack.members(channel)
+		if err != nil {
+			return "", err
+		}
+		var lines []string
+		for _, id := range ids {
+			if id == h.botUser {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%s  <@%s>", h.slack.userName(id), id))
+		}
+		return strings.Join(lines, "\n"), nil
+	case "notify":
+		text := str("text")
+		if text == "" {
+			return "", errors.New("text is required")
+		}
+		link, _ := h.linkForChannel(channel)
+		msg := fmt.Sprintf("From *%s* (<#%s>): %s", link.Topic, channel, text)
+		var sent []string
+		for u := range h.allowed {
+			if err := h.slack.dm(u, msg); err != nil {
+				return "", err
+			}
+			sent = append(sent, u)
+		}
+		return fmt.Sprintf("sent to %d allowed user(s)", len(sent)), nil
 	case "read_history":
 		limit := 20
 		if f, ok := args["limit"].(float64); ok && f >= 1 {

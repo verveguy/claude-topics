@@ -1,0 +1,125 @@
+package main
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+)
+
+// Addressing, catch-up context and mention limits: how a channel with more going on
+// than one person and one topic stays usable.
+
+// unsentLimit bounds the catch-up kept per channel.
+const unsentLimit = 30
+
+// addressed reports whether a message in a mention-mode channel is for Claude: it
+// mentions the bot, or it is in a thread the bot takes part in.
+func (h *hub) addressed(m slackMessage) bool {
+	if h.botUser != "" && strings.Contains(m.text, "<@"+h.botUser+">") {
+		h.mu.Lock()
+		h.botThreads[m.channel+"/"+m.ts] = true // a top-level mention starts a thread
+		if m.thread != "" {
+			h.botThreads[m.channel+"/"+m.thread] = true
+		}
+		h.mu.Unlock()
+		return true
+	}
+	if m.thread == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.botThreads[m.channel+"/"+m.thread]
+}
+
+func (h *hub) remember(m slackMessage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	q := append(h.unsent[m.channel], m)
+	if len(q) > unsentLimit {
+		q = q[len(q)-unsentLimit:]
+	}
+	h.unsent[m.channel] = q
+}
+
+// withCatchUp prefixes a message with what was said in the same place (its thread, or
+// the channel's top level) that Claude was not sent, and forgets those lines. Claude
+// follows the conversation without being woken for every message of it.
+func (h *hub) withCatchUp(m slackMessage) string {
+	h.mu.Lock()
+	var before, kept []slackMessage
+	for _, u := range h.unsent[m.channel] {
+		if u.thread == m.thread || (m.thread != "" && u.ts == m.thread) {
+			before = append(before, u)
+		} else {
+			kept = append(kept, u)
+		}
+	}
+	h.unsent[m.channel] = kept
+	h.mu.Unlock()
+	text := strings.TrimSpace(strings.ReplaceAll(m.text, "<@"+h.botUser+">", ""))
+	if len(before) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString("[Said here since you last heard from this conversation:]\n")
+	for _, u := range before {
+		fmt.Fprintf(&b, "%s: %s\n", h.slack.userName(u.user), u.text)
+	}
+	b.WriteString("[The message for you:]\n")
+	b.WriteString(text)
+	return b.String()
+}
+
+var (
+	broadcastMention = regexp.MustCompile(`<!(channel|here|everyone)(\|[^>]*)?>`)
+	groupMention     = regexp.MustCompile(`<!subteam\^[A-Z0-9]+(\|([^>]*))?>`)
+	userMention      = regexp.MustCompile(`<@([UW][A-Z0-9]+)(\|[^>]*)?>`)
+)
+
+// limitMentions keeps what Claude posts from paging people: broadcast and group
+// mentions become plain text, and so does a mention of anyone not in the channel. One
+// prompt-injected sentence should not be able to notify a whole workspace.
+func (h *hub) limitMentions(channel, text string) string {
+	text = broadcastMention.ReplaceAllString(text, "@$1")
+	text = groupMention.ReplaceAllStringFunc(text, func(s string) string {
+		if m := groupMention.FindStringSubmatch(s); m[2] != "" {
+			return m[2]
+		}
+		return "@group"
+	})
+	if !userMention.MatchString(text) {
+		return text
+	}
+	members := h.channelMembers(channel)
+	return userMention.ReplaceAllStringFunc(text, func(s string) string {
+		id := userMention.FindStringSubmatch(s)[1]
+		if members[id] {
+			return s
+		}
+		return h.slack.userName(id)
+	})
+}
+
+func (h *hub) channelMembers(channel string) map[string]bool {
+	h.mu.Lock()
+	c, ok := h.memberSet[channel]
+	h.mu.Unlock()
+	if ok && time.Since(c.fetched) < 5*time.Minute {
+		return c.ids
+	}
+	ids, err := h.slack.members(channel)
+	set := map[string]bool{}
+	if err != nil {
+		h.log("listing members of %s: %v", channel, err)
+		return set // unknown: nobody may be mentioned
+	}
+	for _, id := range ids {
+		set[id] = true
+	}
+	h.mu.Lock()
+	h.memberSet[channel] = memberCache{ids: set, fetched: time.Now()}
+	h.mu.Unlock()
+	return set
+}

@@ -23,6 +23,8 @@ const slackCommandHelp = "`/topics new <name> [dir] [--profile p]`  create a top
 	"`/topics link <name> [--profile p]`  link this channel to an existing topic\n" +
 	"`/topics unlink`  stop routing this channel\n" +
 	"`/topics up` · `down` · `restart`  this channel's topic\n" +
+	"`/topics stop`  interrupt what it is doing right now\n" +
+	"`/topics mode all|mention`  `all`: every message goes to it; `mention`: only messages that @mention the bot, and threads it is in\n" +
 	"`/topics status`  what this channel is linked to\n" +
 	"Profiles are named as for `topic move --to`: a tag such as `kmba`, `default`, or a path. " +
 	"Without --profile, `new` uses the hub's own profile and `link` looks in every profile. " +
@@ -181,7 +183,45 @@ func (h *hub) onCommand(user, channel, text string) string {
 		case h.topicUp(link):
 			state = "running, but not listening (needs `/topics restart`)"
 		}
-		return fmt.Sprintf("This channel is *%s* (profile %s): %s.", link.Topic, profileLabel(link.ConfigDir), state)
+		mode := "every message goes to it"
+		if link.Mode == modeMention {
+			mode = "only @mentions and its threads go to it"
+		}
+		return fmt.Sprintf("This channel is *%s* (profile %s): %s; %s.", link.Topic, profileLabel(link.ConfigDir), state, mode)
+	case "mode":
+		if !linked {
+			return needLink()
+		}
+		var mode string
+		switch strings.ToLower(c.name) {
+		case "all":
+		case "mention", "mentions":
+			mode = modeMention
+		default:
+			return "`/topics mode all` (every message goes to the topic) or `/topics mode mention` (only @mentions and its threads)"
+		}
+		if err := setLinkMode(h.home, channel, mode); err != nil {
+			return err.Error()
+		}
+		h.reloadLinks()
+		if mode == modeMention {
+			h.say(channel, fmt.Sprintf("<@%s> set this channel to mention mode: *%s* hears messages that @mention <@%s>, and replies in threads it is in. The rest reaches it as context when it is next addressed.", user, link.Topic, h.botUser))
+		} else {
+			h.say(channel, fmt.Sprintf("<@%s> set this channel so every message goes to *%s*.", user, link.Topic))
+		}
+		return "Done."
+	case "stop":
+		if !linked {
+			return needLink()
+		}
+		if !h.topicUp(link) {
+			return fmt.Sprintf("*%s* is not running.", link.Topic)
+		}
+		if err := h.interrupt(link); err != nil {
+			return "Could not interrupt it: " + err.Error()
+		}
+		h.say(channel, fmt.Sprintf("<@%s> stopped what *%s* was doing. Its session is intact; say what to do next.", user, link.Topic))
+		return "Stopped."
 	case "new":
 		if c.name == "" {
 			return "`/topics new <name> [dir] [--profile p]`"
@@ -352,4 +392,19 @@ func (h *hub) promptUnlinked(channel, thread string, force bool) {
 	if _, err := h.slack.post(channel, thread, text, nil); err != nil {
 		h.log("posting to %s: %v", channel, err)
 	}
+}
+
+// setLinkMode changes how a linked channel addresses its topic.
+func setLinkMode(home, channel, mode string) error {
+	links, err := loadLinks(home)
+	if err != nil {
+		return err
+	}
+	for i := range links {
+		if links[i].Channel == channel {
+			links[i].Mode = mode
+			return saveLinks(home, links)
+		}
+	}
+	return fmt.Errorf("this channel is not linked")
 }
