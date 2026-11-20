@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -383,19 +384,25 @@ type slackMessage struct {
 var permissionReply = regexp.MustCompile(`(?i)^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$`)
 
 func (h *hub) onMessage(m slackMessage) {
-	if !h.allowed[m.user] {
-		return
-	}
 	if strings.HasPrefix(m.channel, "D") {
-		h.onDM(m)
+		if h.allowed[m.user] {
+			h.onDM(m)
+		}
 		return
 	}
 	link, ok := h.linkForChannel(m.channel)
 	if !ok {
-		h.promptUnlinked(m.channel, m.thread, false)
+		if h.allowed[m.user] {
+			h.promptUnlinked(m.channel, m.thread, false)
+		}
 		return
 	}
-	if r := permissionReply.FindStringSubmatch(m.text); r != nil {
+	// Outside team mode the topic hears only the people it takes direction from.
+	directs := h.directs(link, m.user)
+	if !directs && link.Mode != modeTeam {
+		return
+	}
+	if r := permissionReply.FindStringSubmatch(m.text); r != nil && h.allowed[m.user] {
 		allow := strings.HasPrefix(strings.ToLower(r[1]), "y")
 		if h.answerPermission(strings.ToLower(r[2]), allow, m.user, m.channel) {
 			_ = h.slack.react(m.channel, m.ts, map[bool]string{true: "white_check_mark", false: "x"}[allow])
@@ -409,16 +416,17 @@ func (h *hub) onMessage(m slackMessage) {
 	content := m.text
 	// In mention mode a bare `up` still starts a topic that is not listening; to a
 	// running one it is just chatter.
-	isUp := strings.EqualFold(strings.TrimSpace(m.text), "up")
-	if link.Mode == modeMention && !(isUp && !listening) {
+	isUp := directs && strings.EqualFold(strings.TrimSpace(m.text), "up")
+	if (link.Mode == modeMention || link.Mode == modeTeam) && !(isUp && !listening) {
 		if !h.addressed(m) {
 			h.remember(m)
 			return
 		}
-		content = h.withCatchUp(m)
+		content = h.withCatchUp(link, m)
 	}
 
-	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user}
+	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user,
+		"directs": strconv.FormatBool(directs)}
 	if m.thread != "" {
 		meta["thread_ts"] = m.thread
 	}
@@ -433,7 +441,7 @@ func (h *hub) onMessage(m slackMessage) {
 	}
 
 	running := h.topicUp(link)
-	if strings.EqualFold(strings.TrimSpace(m.text), "up") {
+	if isUp {
 		h.bringUp(link, m, running)
 		return
 	}
@@ -457,8 +465,10 @@ func (h *hub) onMessage(m slackMessage) {
 		notice = fmt.Sprintf("*%s* is running but not listening to Slack: it was started before this channel was linked. "+
 			"It picks the channel up at its next launch (`topic down %q && topic up %q`). I'm holding your message until then.",
 			link.Topic, link.Topic, link.Topic)
-	} else {
+	} else if directs {
 		notice = fmt.Sprintf("*%s* is down. Reply `up` (or `/topics up`) to start it, and I'll pass your message on once it's running.", link.Topic)
+	} else {
+		notice = fmt.Sprintf("*%s* is down. I'll pass your message on when it is next started.", link.Topic)
 	}
 	if _, err := h.slack.post(m.channel, m.thread, notice, nil); err != nil {
 		h.log("posting to %s: %v", m.channel, err)
@@ -718,6 +728,7 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 		return "", errors.New("this topic is not linked to a Slack channel (topic slack link)")
 	}
 	str := func(k string) string { s, _ := args[k].(string); return s }
+	home, _ := h.linkForChannel(channel)
 	// A topic may answer in a DM it notified in, and nowhere else but its channel.
 	if c := str("channel"); c != "" && c != channel {
 		h.mu.Lock()
@@ -814,6 +825,9 @@ func (h *hub) runTool(key, tool string, args map[string]any) (string, error) {
 			extra := ""
 			if m.ReplyCount > 0 {
 				extra = fmt.Sprintf(" replies=%d", m.ReplyCount)
+			}
+			if m.User != "" && !strings.HasPrefix(channel, "D") {
+				who = h.who(home, m.User)
 			}
 			lines = append(lines, fmt.Sprintf("[ts=%s%s] %s: %s", m.Timestamp, extra, who, m.Text))
 		}

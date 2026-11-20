@@ -49,7 +49,7 @@ func (h *hub) remember(m slackMessage) {
 // not sent, grouped by where it was said (the channel's top level, or each thread),
 // and forgets those lines. Claude follows the whole channel, threads included,
 // without being woken for every message of it.
-func (h *hub) withCatchUp(m slackMessage) string {
+func (h *hub) withCatchUp(link slackLink, m slackMessage) string {
 	h.mu.Lock()
 	before := h.unsent[m.channel]
 	delete(h.unsent, m.channel)
@@ -97,12 +97,34 @@ func (h *hub) withCatchUp(m slackMessage) string {
 			fmt.Fprintf(&b, "In the thread thread_ts=%s%s:\n", k, here)
 		}
 		for _, u := range groups[k] {
-			fmt.Fprintf(&b, "  [ts=%s] %s: %s\n", u.ts, h.slack.userName(u.user), u.text)
+			fmt.Fprintf(&b, "  [ts=%s] %s: %s\n", u.ts, h.who(link, u.user), u.text)
 		}
 	}
-	b.WriteString("[The message for you:]\n")
+	fmt.Fprintf(&b, "[The message for you, from %s:]\n", h.who(link, m.user))
 	b.WriteString(text)
 	return b.String()
+}
+
+// directs reports whether the topic takes direction from a user in this channel: an
+// allowed user anywhere, or someone trusted here.
+func (h *hub) directs(link slackLink, user string) bool {
+	if h.allowed[user] {
+		return true
+	}
+	for _, u := range link.Trusted {
+		if u == user {
+			return true
+		}
+	}
+	return false
+}
+
+// who names a sender for Claude, with whether it may take direction from them.
+func (h *hub) who(link slackLink, user string) string {
+	if h.directs(link, user) {
+		return h.slack.userName(user) + " (can direct)"
+	}
+	return h.slack.userName(user) + " (cannot direct)"
 }
 
 var (

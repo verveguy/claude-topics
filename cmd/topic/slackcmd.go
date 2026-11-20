@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -24,7 +26,9 @@ const slackCommandHelp = "`/topics new <name> [dir] [--profile p]`  create a top
 	"`/topics unlink`  stop routing this channel\n" +
 	"`/topics up` · `down` · `restart`  this channel's topic\n" +
 	"`/topics stop`  interrupt what it is doing right now\n" +
-	"`/topics mode all|mention`  `all`: every message goes to it; `mention`: only messages that @mention the bot, and threads it is in\n" +
+	"`/topics mode all|mention|team`  `all`: every message goes to it; `mention`: only messages that @mention the bot, and threads it is in; " +
+	"`team`: as mention, but it hears everyone in the channel and acts only for those it takes direction from\n" +
+	"`/topics trust @someone…` · `untrust @someone…`  who else it takes direction from, in this channel only\n" +
 	"`/topics status`  what this channel is linked to\n" +
 	"Profiles are named as for `topic move --to`: a tag such as `kmba`, `default`, or a path. " +
 	"Without --profile, `new` uses the hub's own profile and `link` looks in every profile. " +
@@ -158,6 +162,7 @@ func (h *hub) onCommand(user, channel, text string) string {
 	if !h.allowed[user] {
 		return "Only allowed users can manage topics from Slack."
 	}
+	text = strings.NewReplacer("&amp;", "&", "&lt;", "<", "&gt;", ">").Replace(text)
 	c, err := parseTopicCommand(text)
 	if err != nil {
 		return err.Error() + "\n" + slackCommandHelp
@@ -184,10 +189,21 @@ func (h *hub) onCommand(user, channel, text string) string {
 			state = "running, but not listening (needs `/topics restart`)"
 		}
 		mode := "every message goes to it"
-		if link.Mode == modeMention {
+		switch link.Mode {
+		case modeMention:
 			mode = "only @mentions and its threads go to it"
+		case modeTeam:
+			mode = "team mode: it hears everyone, and @mentions and its threads wake it"
 		}
-		return fmt.Sprintf("This channel is *%s* (profile %s): %s; %s.", link.Topic, profileLabel(link.ConfigDir), state, mode)
+		trusted := "only allowed users direct it"
+		if len(link.Trusted) > 0 {
+			var names []string
+			for _, u := range link.Trusted {
+				names = append(names, "<@"+u+">")
+			}
+			trusted = "it also takes direction from " + strings.Join(names, ", ")
+		}
+		return fmt.Sprintf("This channel is *%s* (profile %s): %s; %s; %s.", link.Topic, profileLabel(link.ConfigDir), state, mode, trusted)
 	case "mode":
 		if !linked {
 			return needLink()
@@ -197,17 +213,69 @@ func (h *hub) onCommand(user, channel, text string) string {
 		case "all":
 		case "mention", "mentions":
 			mode = modeMention
+		case "team":
+			mode = modeTeam
 		default:
-			return "`/topics mode all` (every message goes to the topic) or `/topics mode mention` (only @mentions and its threads)"
+			return "`/topics mode all` (every message goes to the topic), `/topics mode mention` (only @mentions and its threads) or `/topics mode team` (as mention, hearing everyone)"
 		}
-		if err := setLinkMode(h.home, channel, mode); err != nil {
+		if err := updateLink(h.home, channel, func(l *slackLink) { l.Mode = mode }); err != nil {
 			return err.Error()
 		}
 		h.reloadLinks()
-		if mode == modeMention {
+		if mode == modeTeam {
+			h.say(channel, fmt.Sprintf("<@%s> set this channel to team mode: *%s* follows everything said here, and answers when someone @mentions <@%s> or replies in its threads. "+
+				"It acts only for people it takes direction from (`/topics trust @someone`); with anyone else it just talks.", user, link.Topic, h.botUser))
+		} else if mode == modeMention {
 			h.say(channel, fmt.Sprintf("<@%s> set this channel to mention mode: *%s* hears messages that @mention <@%s>, and replies in threads it is in. The rest reaches it as context when it is next addressed.", user, link.Topic, h.botUser))
 		} else {
 			h.say(channel, fmt.Sprintf("<@%s> set this channel so every message goes to *%s*.", user, link.Topic))
+		}
+		return "Done."
+	case "trust", "untrust":
+		if !linked {
+			return needLink()
+		}
+		var ids []string
+		for _, m := range userMention.FindAllStringSubmatch(text, -1) {
+			ids = append(ids, m[1])
+		}
+		for _, w := range strings.Fields(c.name) {
+			if bareUserID.MatchString(w) {
+				ids = append(ids, w)
+			}
+		}
+		if len(ids) == 0 {
+			return "Name someone with an @mention: `/topics " + c.verb + " @someone`. If the mention did not come through as a user, " +
+				"the app's /topics command needs `should_escape: true` (`topic slack setup` rewrites the manifest), or pass their member ID (U…)."
+		}
+		err := updateLink(h.home, channel, func(l *slackLink) {
+			keep := map[string]bool{}
+			for _, u := range l.Trusted {
+				keep[u] = true
+			}
+			for _, u := range ids {
+				keep[u] = c.verb == "trust"
+			}
+			l.Trusted = nil
+			for u, ok := range keep {
+				if ok && !h.allowed[u] {
+					l.Trusted = append(l.Trusted, u)
+				}
+			}
+			sort.Strings(l.Trusted)
+		})
+		if err != nil {
+			return err.Error()
+		}
+		h.reloadLinks()
+		var names []string
+		for _, u := range ids {
+			names = append(names, "<@"+u+">")
+		}
+		if c.verb == "trust" {
+			h.say(channel, fmt.Sprintf("<@%s>: *%s* now takes direction from %s in this channel.", user, link.Topic, strings.Join(names, ", ")))
+		} else {
+			h.say(channel, fmt.Sprintf("<@%s>: *%s* no longer takes direction from %s.", user, link.Topic, strings.Join(names, ", ")))
 		}
 		return "Done."
 	case "stop":
@@ -394,15 +462,17 @@ func (h *hub) promptUnlinked(channel, thread string, force bool) {
 	}
 }
 
-// setLinkMode changes how a linked channel addresses its topic.
-func setLinkMode(home, channel, mode string) error {
+var bareUserID = regexp.MustCompile(`^[UW][A-Z0-9]{6,}$`)
+
+// updateLink changes this channel's link in links.json.
+func updateLink(home, channel string, change func(*slackLink)) error {
 	links, err := loadLinks(home)
 	if err != nil {
 		return err
 	}
 	for i := range links {
 		if links[i].Channel == channel {
-			links[i].Mode = mode
+			change(&links[i])
 			return saveLinks(home, links)
 		}
 	}

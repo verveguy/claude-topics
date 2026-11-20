@@ -753,8 +753,8 @@ func TestMentionModeSendsOnlyWhatIsAddressedWithCatchUp(t *testing.T) {
 
 	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "<@UBOT> what do you think?", ts: "1.2"})
 	w := a.next(t)
-	if !strings.Contains(w.Content, "In the channel (where the message for you was posted):\n  [ts=1.1] name-UME: shall we ship friday?") ||
-		!strings.Contains(w.Content, "In the thread thread_ts=0.9:\n  [ts=1.3] name-UME: side thread") ||
+	if !strings.Contains(w.Content, "In the channel (where the message for you was posted):\n  [ts=1.1] name-UME (can direct): shall we ship friday?") ||
+		!strings.Contains(w.Content, "In the thread thread_ts=0.9:\n  [ts=1.3] name-UME (can direct): side thread") ||
 		!strings.HasSuffix(w.Content, "what do you think?") || strings.Contains(w.Content, "<@UBOT>") {
 		t.Fatalf("addressed message = %q, want the channel's catch-up, threads included, and the message, without the mention", w.Content)
 	}
@@ -872,6 +872,72 @@ func TestHubStateSurvivesARestart(t *testing.T) {
 	if h2.dmLast["DUME"] != topicKey("/p", "Alpha") || !h2.dmMayUse[topicKey("/p", "Alpha")+"|DUME"] {
 		t.Errorf("dm state = %v %v", h2.dmLast, h2.dmMayUse)
 	}
+}
+
+func TestTeamModeHearsEveryoneAndTrustIsPerChannel(t *testing.T) {
+	h, fake := newTestHub(t, slackLink{Channel: "CA", Topic: "Alpha", ConfigDir: "/p"}, slackLink{Channel: "CB", Topic: "Beta", ConfigDir: "/p"})
+	h.botUser = "UBOT"
+	a := connectShim(t, h, "Alpha", "/p")
+	a.next(t)
+	quiet := func(why string) {
+		t.Helper()
+		select {
+		case w := <-a.in:
+			t.Fatalf("%s reached the topic: %+v", why, w)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	// Outside team mode, someone who cannot direct the topic is not heard at all.
+	h.onMessage(slackMessage{channel: "CA", user: "UPAL", text: "<@UBOT> hi", ts: "1.0"})
+	quiet("a stranger outside team mode")
+
+	if r := h.onCommand("UME", "CA", "mode team"); r != "Done." {
+		t.Fatalf("mode team: %q", r)
+	}
+	h.onMessage(slackMessage{channel: "CA", user: "UPAL", text: "I think we need a cache", ts: "2.0"})
+	quiet("unaddressed chatter")
+	h.onMessage(slackMessage{channel: "CA", user: "UPAL", text: "<@UBOT> can you add one?", ts: "3.0"})
+	w := a.next(t)
+	if w.Meta["directs"] != "false" || !strings.Contains(w.Content, "name-UPAL (cannot direct): I think we need a cache") ||
+		!strings.Contains(w.Content, "[The message for you, from name-UPAL (cannot direct):]\ncan you add one?") {
+		t.Fatalf("a stranger's mention = %+v", w)
+	}
+	h.onMessage(slackMessage{channel: "CA", user: "UME", text: "<@UBOT> yes, add it", ts: "4.0"})
+	if w := a.next(t); w.Meta["directs"] != "true" || w.Content != "yes, add it" {
+		t.Fatalf("the owner's mention = %+v", w)
+	}
+
+	// Trust is the owners' to give, and for this channel only.
+	if r := h.onCommand("UPAL", "CA", "trust <@UPAL|pal>"); !strings.Contains(r, "Only allowed users") {
+		t.Fatalf("a stranger trusted themselves: %q", r)
+	}
+	if r := h.onCommand("UME", "CA", "trust <@UPAL|pal>"); r != "Done." {
+		t.Fatalf("trust: %q", r)
+	}
+	if l, _ := h.linkForChannel("CA"); len(l.Trusted) != 1 || l.Trusted[0] != "UPAL" {
+		t.Fatalf("trusted = %v", l.Trusted)
+	}
+	if l, _ := h.linkForChannel("CB"); len(l.Trusted) != 0 {
+		t.Fatalf("trust leaked to another channel: %v", l.Trusted)
+	}
+	h.onMessage(slackMessage{channel: "CA", user: "UPAL", text: "<@UBOT> now add it", ts: "5.0"})
+	if w := a.next(t); w.Meta["directs"] != "true" {
+		t.Fatalf("a trusted user's mention = %+v", w)
+	}
+	if r := h.onCommand("UME", "CA", "status"); !strings.Contains(r, "team mode") || !strings.Contains(r, "<@UPAL>") {
+		t.Errorf("status = %q", r)
+	}
+	if r := h.onCommand("UME", "CA", "untrust <@UPAL>"); r != "Done." {
+		t.Fatalf("untrust: %q", r)
+	}
+	if l, _ := h.linkForChannel("CA"); len(l.Trusted) != 0 {
+		t.Fatalf("trusted after untrust = %v", l.Trusted)
+	}
+	if r := h.onCommand("UME", "CA", "trust @pal"); !strings.Contains(r, "should_escape") {
+		t.Errorf("trust with an unresolved name = %q", r)
+	}
+	_ = fake
 }
 
 func TestTopicsModeAndStop(t *testing.T) {

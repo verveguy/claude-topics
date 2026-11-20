@@ -125,13 +125,21 @@ type slackLink struct {
 	Channel   string `json:"channel"`
 	Topic     string `json:"topic"`
 	ConfigDir string `json:"configDir"`
-	// Mode is how the channel addresses its topic: "" (every message from an allowed
-	// user goes to it) or modeMention (only messages that mention the bot, and replies
-	// in threads it takes part in; the rest arrives as catch-up context).
+	// Mode is how the channel addresses its topic: "" (every message from someone who
+	// can direct it goes to it), modeMention (only their messages that mention the bot,
+	// and replies in threads it takes part in; the rest arrives as catch-up context) or
+	// modeTeam (as mention, but everyone in the channel is heard, labelled with whether
+	// they can direct the topic).
 	Mode string `json:"mode,omitempty"`
+	// Trusted are the Slack users, besides the allowed users, that the topic takes
+	// direction from in this channel. Only an allowed user can change it.
+	Trusted []string `json:"trusted,omitempty"`
 }
 
-const modeMention = "mention"
+const (
+	modeMention = "mention"
+	modeTeam    = "team"
+)
 
 func (l slackLink) key() string { return topicKey(l.ConfigDir, l.Topic) }
 
@@ -310,8 +318,8 @@ features:
   slash_commands:
     - command: /topics
       description: Create, link and manage the topic behind this channel
-      usage_hint: "new <name> [dir] [--profile p] | link <name> | unlink | up | down | restart | status"
-      should_escape: false
+      usage_hint: "new <name> [dir] [--profile p] | link <name> | unlink | up | down | restart | stop | mode | trust @someone | status"
+      should_escape: true      # @mentions arrive as user IDs, for /topics trust
   app_home:                # lets you answer notify's DMs
     home_tab_enabled: false
     messages_tab_enabled: true

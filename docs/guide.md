@@ -150,6 +150,9 @@ channel up at its next launch (`/topics restart`).
 | `/topics link <name> [--profile p]` | link to an existing topic, found in whichever profile has it |
 | `/topics unlink` | stop routing this channel |
 | `/topics up` · `down` · `restart` · `status` · `help` | for this channel's topic |
+| `/topics stop` | interrupt what the topic is doing (Escape in its session) |
+| `/topics mode all\|mention\|team` | how the channel addresses the topic: see below |
+| `/topics trust @someone…` · `untrust @someone…` | who else the topic takes direction from, in this channel only |
 
 `--profile` takes what `topic move --to` takes: a tag (`kmba`), `default`, or a path. A slash
 command never appears in the channel, so it never reaches Claude: control and conversation
@@ -162,14 +165,38 @@ stay apart. (Slack's built-in `/topic` sets a channel's description, hence the p
 - **Permission prompts** are posted with Allow and Deny buttons. Replying `yes <id>` or
   `no <id>` also works.
 - **Receipts:** 👀 means delivered, 📥 held, ⏳ starting.
+- **`notify`** lets Claude DM the allowed users. A reply under that DM goes back to the topic
+  that sent it; any other DM goes to the topic that last notified you.
+
+### Modes
+
+- **`all`** (the default): every message from someone the topic takes direction from goes to
+  it.
+- **`mention`**: only their messages that @mention the bot, and replies in threads it is in.
+  What else they said arrives with the next one as catch-up, grouped by thread.
+- **`team`**: as `mention`, but the topic hears everyone in the channel. An @mention or a reply
+  in its threads wakes it, whoever wrote it. Everything else reaches it as catch-up. Each
+  message is labelled with its sender and whether the topic takes direction from them. It acts
+  only for those who can direct it. With anyone else it talks: it answers, asks clarifying
+  questions and discusses, but does no work for them.
+
+The topic takes direction from the allowed users, and in each channel from whoever an allowed
+user has named with `/topics trust`. Trusting someone in one channel gives them nothing in
+another.
 
 ### Trust
 
 A message to a topic is an instruction to a Claude session running as you, on your machine.
 So:
 
-- Only users in `SLACK_ALLOWED_USERS` reach a topic, run `/topics` or answer permission
-  prompts. Everyone else in the channel is ignored. Invites are answered only for allowed
+- Only users in `SLACK_ALLOWED_USERS` run `/topics`, answer permission prompts or reach a
+  topic by DM. In a channel, a topic also hears the people trusted there. Everyone else is
+  ignored, except in team mode, where they are heard but cannot direct it.
+- In team mode, "cannot direct" is an instruction to Claude, not a sandbox. Someone persuasive
+  could still talk a topic into acting. What actually stops them: anything that would need a
+  permission prompt waits for an allowed user, and the topic cannot reach other channels.
+  Tools your settings already allow are not covered. Keep team mode for people you would let
+  watch over your shoulder, and use a sandboxed topic for anyone else. Invites are answered only for allowed
   inviters, and nothing is created until one of them runs `/topics new` or `/topics link`.
 - A topic's tools act on its own channel only. The hub holds the Slack tokens; sessions never
   see them.
