@@ -428,7 +428,13 @@ To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
+./install.sh --all     # later: reinstall every profile that has an agent
 ```
+
+With `CLAUDE_CONFIG_DIR` unset, `install.sh` targets the default profile only if that
+is plainly meant: it already has an agent, or nothing is installed yet. On a machine
+where other profiles are installed and the default is not, it refuses rather than add
+a Dispatcher for a profile you do not use; pass `--default` if you do mean it.
 
 On **Windows**, from PowerShell (needs Go, and MSYS2 with `pacman -S tmux`):
 

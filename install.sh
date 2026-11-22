@@ -8,7 +8,9 @@
 # macOS's Removable Volumes gate) and be the file any Full Disk Access grant names.
 # Re-run after changing anything under cmd/.
 #
-#   ./install.sh            install (refuses to clobber non-symlink files)
+#   ./install.sh            install into the active profile (CLAUDE_CONFIG_DIR)
+#   ./install.sh --all      reinstall every profile that already has an agent
+#   ./install.sh --default  allow installing the default profile (see below)
 #   ./install.sh --force    replace existing files, backing them up to *.bak
 #   ./install.sh --uninstall
 set -euo pipefail
@@ -35,16 +37,63 @@ PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 LEGACY_PLIST="$HOME/Library/LaunchAgents/com.verveguy.claude-dispatcher$PROFILE_SUFFIX.plist"
 LOG_PATH="$HOME/Library/Logs/claude-dispatcher$PROFILE_SUFFIX.log"
 
-FORCE=0; UNINSTALL=0
+FORCE=0; UNINSTALL=0; ALL=0; DEFAULT_OK=0
 for a in "$@"; do
   case "$a" in
     --force) FORCE=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --all) ALL=1 ;;
+    --default) DEFAULT_OK=1 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
 
 say() { printf '  %s\n' "$*"; }
+
+AGENTS_DIR="$HOME/Library/LaunchAgents"
+
+# --all: re-run this script once per installed Dispatcher agent, with the profile
+# that agent was rendered for. The agent's own EnvironmentVariables are the record
+# of which profile it serves; no CLAUDE_CONFIG_DIR there means the default profile.
+if [[ $ALL -eq 1 ]]; then
+  [[ $UNINSTALL -eq 1 ]] && { echo "--all and --uninstall cannot be combined" >&2; exit 2; }
+  pass=(); [[ $FORCE -eq 1 ]] && pass+=(--force)
+  shopt -s nullglob
+  plists=("$AGENTS_DIR"/io.github.verveguy.claude-dispatcher*.plist)
+  [[ ${#plists[@]} -gt 0 ]] || { echo "--all: no Dispatcher agents installed; run ./install.sh first" >&2; exit 1; }
+  for p in "${plists[@]}"; do
+    dir="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CLAUDE_CONFIG_DIR' "$p" 2>/dev/null || true)"
+    echo "== $(basename "$p" .plist)"
+    if [[ -n "$dir" ]]; then
+      CLAUDE_CONFIG_DIR="$dir" bash "$REPO/install.sh" "${pass[@]+"${pass[@]}"}"
+    else
+      env -u CLAUDE_CONFIG_DIR bash "$REPO/install.sh" --default "${pass[@]+"${pass[@]}"}"
+    fi
+  done
+  exit 0
+fi
+
+# Guard the default profile. Forgetting CLAUDE_CONFIG_DIR is the easy mistake on a
+# multi-profile machine, and it would quietly add a Dispatcher agent (and a
+# Dispatcher) for a profile you do not use. So with CLAUDE_CONFIG_DIR unset, go ahead
+# only when that is plainly meant: the default profile is already installed, nothing
+# is installed yet (a first install), or --default says so.
+if [[ "$CLAUDE_DIR" == "$HOME/.claude" && $DEFAULT_OK -eq 0 ]]; then
+  shopt -s nullglob
+  others=("$AGENTS_DIR"/io.github.verveguy.claude-dispatcher-*.plist)
+  shopt -u nullglob
+  if [[ ! -f "$PLIST_DEST" && ! -f "$LEGACY_PLIST" && ${#others[@]} -gt 0 ]]; then
+    echo "install.sh: CLAUDE_CONFIG_DIR is unset, so this would target the default profile" >&2
+    echo "  (~/.claude), which has no Dispatcher agent here. Installed profiles:" >&2
+    for p in "${others[@]}"; do
+      echo "    $(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CLAUDE_CONFIG_DIR' "$p" 2>/dev/null || basename "$p")" >&2
+    done
+    echo "  Pick one:  CLAUDE_CONFIG_DIR=~/.claude-<profile> ./install.sh" >&2
+    echo "  Or all:    ./install.sh --all" >&2
+    echo "  Or, if you really mean the default profile:  ./install.sh --default" >&2
+    exit 1
+  fi
+fi
 
 TOPIC_ID="${TOPIC_IDENTIFIER:-io.github.verveguy.topic}"
 
