@@ -410,9 +410,17 @@ cd ~/dev/claude-topics && ./install.sh
 topic --help
 ```
 
-`install.sh` builds `bin/topic` and links it, the plugin and a launchd agent into
-place — the plugin as a **symlink back into the repo**, so editing a skill takes
-effect immediately. Re-run it after changing anything under `cmd/`.
+`install.sh` builds `bin/topic`, **copies** it to `~/.local/bin/topic`, and puts the
+plugin and a launchd agent into place — the plugin as a **symlink back into the repo**,
+so editing a skill takes effect immediately. Re-run it after changing anything under
+`cmd/`: the installed binary is a copy, so a rebuild alone does not reach it.
+
+The binary is copied rather than linked because launchd runs it at login and it
+becomes the responsible process for every tmux session (see below). It has to live on
+the boot volume: if the repo is on an external drive, a symlink into it puts the
+Dispatcher behind macOS's Removable Volumes protection, which can block launchd from
+starting it and block every session from touching the repo. It is also the file a
+Full Disk Access grant names, so it should not move when the repo does.
 
 **Build with `make build` or `./install.sh`, never a bare `go build`** — see below.
 
@@ -502,11 +510,29 @@ tccutil reset All io.github.verveguy.topic
 topic cycle up
 ```
 
-To sign with a real Developer ID instead of ad-hoc:
+**Sign with a Developer ID if you grant `topic` anything.** An ad-hoc signature is
+enough for a denial to stick, but macOS records an ad-hoc binary's grants against its
+exact hash (`codesign -d -r- ~/.local/bin/topic` shows `designated => cdhash …`), so a
+grant silently stops applying after the next rebuild. A Developer ID signature is
+recorded against your team ID and identifier instead, and survives rebuilds. Put the
+identity in `.sign-identity` (gitignored, per machine) and every build uses it:
 
 ```bash
-TOPIC_SIGN_IDENTITY="Developer ID Application: You (TEAMID)" make build
+security find-identity -v -p codesigning        # list your identities
+echo "Developer ID Application: You (TEAMID)" > .sign-identity
+./install.sh
 ```
+
+`TOPIC_SIGN_IDENTITY=...` overrides it for one build.
+
+**When the repo lives on an external drive** (say `~/dev` on a Thunderbolt SSD), the
+sessions under `topic` need Full Disk Access to it, or new file access there can stall
+behind a permission prompt nobody sees, for example overnight with the screen locked.
+After signing with a Developer ID and installing:
+System Settings → Privacy & Security → Full Disk Access → **+** → ⌘⇧G →
+`~/.local/bin/topic`, then restart the tmux server (`topic cycle down && tmux
+kill-server && topic cycle up`). That grant covers every session, so weigh it against
+the advice above to deny.
 
 ### What it assumes
 

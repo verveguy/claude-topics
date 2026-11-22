@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# install.sh — link this repo into the places Claude Code and launchd look.
+# install.sh — install this repo into the places Claude Code and launchd look.
 #
-# Everything is installed as a SYMLINK back into the repo, so editing a script
-# here takes effect immediately with no reinstall step.
+# The plugin is a SYMLINK back into the repo, so editing a skill takes effect
+# immediately. The `topic` binary is a signed COPY in ~/.local/bin, not a symlink:
+# launchd runs it at login and it becomes the responsible process for every tmux
+# session, so it must live on the boot volume (a repo on an external drive is behind
+# macOS's Removable Volumes gate) and be the file any Full Disk Access grant names.
+# Re-run after changing anything under cmd/.
 #
 #   ./install.sh            install (refuses to clobber non-symlink files)
 #   ./install.sh --force    replace existing files, backing them up to *.bak
@@ -42,6 +46,40 @@ done
 
 say() { printf '  %s\n' "$*"; }
 
+TOPIC_ID="${TOPIC_IDENTIFIER:-io.github.verveguy.topic}"
+
+# is_our_binary <path>: a regular file signed with topic's identifier.
+is_our_binary() {
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  [[ "$(codesign -d --verbose=2 "$1" 2>&1 | sed -n 's/^Identifier=//p')" == "$TOPIC_ID" ]]
+}
+
+# install_bin <src> <dest>: copy a signed binary into place.
+#
+# Atomic on purpose: the copy lands beside <dest> and is renamed over it. Writing
+# into the existing file instead would modify pages of a running, code-signed
+# binary (the Dispatcher agents run it every 5 minutes) and macOS kills the
+# process with "Code Signature Invalid".
+install_bin() {
+  local src="$1" dest="$2"
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    if [[ ! -L "$dest" ]] && cmp -s "$src" "$dest"; then
+      say "ok (up to date): $dest"; return 0
+    fi
+    if [[ $FORCE -eq 0 && ! -L "$dest" ]] && ! is_our_binary "$dest"; then
+      echo "refusing to overwrite unrecognised file: $dest (use --force)" >&2; return 1
+    fi
+    if [[ $FORCE -eq 1 && ! -L "$dest" ]] && ! is_our_binary "$dest"; then
+      cp -p "$dest" "$dest.bak"; say "backed up -> $dest.bak"
+    fi
+  fi
+  mkdir -p "$(dirname "$dest")"
+  local tmp="$dest.new.$$"
+  cp -p "$src" "$tmp"
+  mv -f "$tmp" "$dest"
+  say "installed $dest (copy of $src)"
+}
+
 if [[ $UNINSTALL -eq 1 ]]; then
   echo "Uninstalling…"
   for p in "$PLIST_DEST" "$LEGACY_PLIST"; do
@@ -49,7 +87,9 @@ if [[ $UNINSTALL -eq 1 ]]; then
     launchctl unload "$p" 2>/dev/null || true
     rm -f "$p"; say "removed $p"
   done
-  [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
+  if [[ -L "$BIN/topic" ]] || is_our_binary "$BIN/topic"; then
+    rm -f "$BIN/topic"; say "removed $BIN/topic"
+  fi
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
@@ -90,7 +130,7 @@ link() {
 echo "Installing from $REPO"
 say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
-link "$REPO/bin/topic"          "$BIN/topic"
+install_bin "$REPO/bin/topic"   "$BIN/topic"
 
 link "$REPO/plugin"    "$PLUGIN_DEST"
 
