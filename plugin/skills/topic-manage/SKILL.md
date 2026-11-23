@@ -169,6 +169,8 @@ else does.
 `topic down-all` puts every live topic in the current profile down, skipping the
 calling session. `topic cycle down` / `topic cycle up` does it across every profile
 and handles the launchd agents, which otherwise restart Dispatchers underneath you.
+`cycle down` also stops every registered daemon and waits for it to exit, so a
+`tmux kill-server` afterwards orphans none.
 Both are lossless and both take `--dry-run`; show the user the dry run first.
 `cycle up` brings back the topics `cycle down` put down.
 

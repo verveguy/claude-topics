@@ -70,7 +70,8 @@ everything down and then back. Two commands, because the point is what you do in
 between:
 
 ```bash
-topic cycle down           # unload agents, put every topic in every profile down
+topic cycle down           # unload agents, put every topic in every profile down,
+                           # and stop every registered daemon
 # ...log each profile in from a plain session in ~ , check /status...
 topic cycle up             # reload agents, start each profile's Dispatcher,
                            # and restore the topics cycle down put down
@@ -85,6 +86,12 @@ The ordering is the entire reason this exists:
 - **Unload the launchd agents first.** They run `ensure-dispatcher` every 5 minutes,
   so a Dispatcher put down without unloading its agent comes back underneath you —
   typically in the middle of logging in.
+- **Daemons are stopped by process, and waited for.** Each registered daemon's own
+  process gets SIGTERM, and `cycle down` waits up to a minute for all of them to exit,
+  naming any that did not. Killing the pane is not enough: on 2026-11-22
+  `tmux kill-server` left twelve daemons running headless, still holding their locks, so
+  every fresh copy died on start. They are not marked stopped; `cycle up` starts them
+  again through each Dispatcher's keeper pass.
 - **Putting topics down is lossless.** Each keeps its session UUID; `up` is a real
   `--resume`. Nothing here destroys work, so `down` is safe to run freely.
 - **The calling session is skipped**, since putting it down would kill the script

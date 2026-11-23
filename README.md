@@ -313,8 +313,8 @@ cannot be mistaken for missing topics.
   unqualified search walks every TCC-protected folder you own and raises permission
   dialogs blaming `topic`. Where it runs does not constrain where it starts topics.
 - **[Cycling everything](docs/guide.md#cycling-everything-topic-cycle)** —
-  `topic cycle down` / `up` takes every profile's topics down and back, launchd agents
-  included, for logging in and out or upgrading.
+  `topic cycle down` / `up` takes every profile's topics and daemons down and back,
+  launchd agents included, for logging in and out or upgrading.
 - **[After a crash](docs/guide.md#after-a-crash--topic-restore)** — `topic restore`
   brings back every topic that was up when the machine crashed or rebooted.
 - **[Adopting](docs/guide.md#adopting-an-existing-session)** — bring a session
@@ -349,6 +349,13 @@ daemon's own `.env` pins the Claude profile its workers use (`daemon-env`), so r
 under any profile whose Dispatcher agent is loaded. Each start appends
 `echo "[topic] daemon <name> exited with status $?"`, so an exit is visible in the pane:
 daemons have exited without logging why.
+
+The keeper also remembers which process it last saw running each daemon (pid and start
+time, in `<config dir>/daemon-pids.json`). If that process is still alive when the pane is
+gone or back at a shell, it is an **orphan**: it was left running when its pane went
+away, for example by `tmux kill-server`, and a fresh copy would die on its lock. The keeper
+SIGTERMs it, waits for it to exit, and only then starts the daemon in its pane. One that
+will not exit is reported and left alone. `topic daemons` shows it as `orphaned, pid N`.
 
 ### `topic ui` — browse topics side by side
 
@@ -506,8 +513,9 @@ that app directly.
 
 If you have already been living with this, the signed binary alone won't settle it:
 the running tmux server predates it, and its sessions are still parented onto the old
-one. From a terminal **outside tmux** — and note `kill-server` ends every session,
-including any daemons you run there:
+one. From a terminal **outside tmux** — `cycle down` puts every topic down and stops
+every registered daemon first, so `kill-server` orphans nothing it knows about (a process
+you started in tmux by hand is yours to stop):
 
 ```bash
 topic cycle down

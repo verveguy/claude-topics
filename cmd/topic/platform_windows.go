@@ -9,6 +9,7 @@ package main
 // or not, so isUp could not tell a live topic from a husk. Hence tmuxShell.
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"os"
@@ -328,3 +329,9 @@ func replaceProcess(path string, args []string) error {
 	os.Exit(0)
 	return nil
 }
+
+// procLookup is not implemented on Windows: daemons there are stopped through their
+// pane, and orphans are not detected.
+func procLookup(int) (name, start string, ok bool) { return "", "", false }
+
+func procTerminate(int) error { return errors.New("not supported on Windows") }

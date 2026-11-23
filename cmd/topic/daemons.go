@@ -181,9 +181,24 @@ func ensureDaemons(configDir string) {
 		fmt.Fprintf(os.Stderr, "topic: daemons: %v\n", err)
 		return
 	}
+	remembered := loadDaemonPIDs(configDir)
 	for _, d := range ds {
 		state := daemonState(d.Name)
-		switch daemonAction(d, state) {
+		action := daemonAction(d, state)
+		if state == daemonRunning {
+			rememberDaemon(configDir, d.Name, daemonProcesses(d.Name))
+		}
+		if action == "start" || action == "create-and-start" {
+			if o := orphans(remembered[d.Name], daemonProcesses(d.Name)); len(o) > 0 {
+				fmt.Printf("daemon %q is still running outside tmux as pid %s (orphaned, probably by tmux kill-server) — stopping it first.\n", d.Name, pidList(o))
+				if left, _ := stopProcesses(o, daemonStopWait); len(left) > 0 {
+					fmt.Printf("daemon %q: pid %s did not exit within %s. Not starting another copy, which would die on its lock. Stop it by hand: kill %s\n",
+						d.Name, pidList(left), daemonStopWait, strings.ReplaceAll(pidList(left), ",", ""))
+					continue
+				}
+			}
+		}
+		switch action {
 		case "create-and-start":
 			fmt.Printf("daemon %q is missing — creating its session and starting it.\n", d.Name)
 			if err := startDaemon(d, true); err != nil {
@@ -229,8 +244,14 @@ func cmdDaemons(args []string) error {
 		fmt.Printf("No daemons registered in %s.\n", daemonsPath(args[0]))
 		return nil
 	}
+	remembered := loadDaemonPIDs(args[0])
 	for _, d := range ds {
 		state := daemonState(d.Name)
+		if state == daemonRunning {
+			rememberDaemon(args[0], d.Name, daemonProcesses(d.Name))
+		} else if o := orphans(remembered[d.Name], daemonProcesses(d.Name)); len(o) > 0 {
+			state = "orphaned, pid " + pidList(o)
+		}
 		if d.Stopped {
 			state += " (stopped on purpose)"
 		}
