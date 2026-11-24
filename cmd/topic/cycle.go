@@ -191,8 +191,33 @@ func cmdCycle(args []string) error {
 			}
 		}
 		fmt.Println()
+		fmt.Println("== 3. Stopping daemons (so none outlives a tmux kill-server)")
+		var dirs []string
+		for _, a := range launchAgents() {
+			dirs = append(dirs, a.configDir)
+		}
+		results := stopDaemonsForCycle(dirs, dry)
+		var stuck []stopResult
+		for _, r := range results {
+			if len(r.stragglers) > 0 {
+				stuck = append(stuck, r)
+				continue
+			}
+			fmt.Printf("  stopped %s (pid %s) in %.0fs\n", r.name, pidList(r.stopped), r.took.Seconds())
+		}
+		if len(results) == 0 && !dry {
+			fmt.Println("  (none running)")
+		}
+		for _, r := range stuck {
+			fmt.Printf("  STILL RUNNING after %s: %s (pid %s). Stop it before tmux kill-server, or it is orphaned.\n",
+				daemonStopWait, r.name, pidList(r.stragglers))
+		}
+		fmt.Println()
 		fmt.Println("Next: log each profile in from a plain session in your home directory,")
 		fmt.Println("then run:  topic cycle up")
+		if len(stuck) > 0 {
+			return fmt.Errorf("%d daemon(s) did not stop", len(stuck))
+		}
 		return nil
 
 	case "up":

@@ -313,8 +313,8 @@ cannot be mistaken for missing topics.
   unqualified search walks every TCC-protected folder you own and raises permission
   dialogs blaming `topic`. Where it runs does not constrain where it starts topics.
 - **[Cycling everything](docs/guide.md#cycling-everything-topic-cycle)** —
-  `topic cycle down` / `up` takes every profile's topics down and back, launchd agents
-  included, for logging in and out or upgrading.
+  `topic cycle down` / `up` takes every profile's topics and daemons down and back,
+  launchd agents included, for logging in and out or upgrading.
 - **[After a crash](docs/guide.md#after-a-crash--topic-restore)** — `topic restore`
   brings back every topic that was up when the machine crashed or rebooted.
 - **[Adopting](docs/guide.md#adopting-an-existing-session)** — bring a session
@@ -349,6 +349,13 @@ daemon's own `.env` pins the Claude profile its workers use (`daemon-env`), so r
 under any profile whose Dispatcher agent is loaded. Each start appends
 `echo "[topic] daemon <name> exited with status $?"`, so an exit is visible in the pane:
 daemons have exited without logging why.
+
+The keeper also remembers which process it last saw running each daemon (pid and start
+time, in `<config dir>/daemon-pids.json`). If that process is still alive when the pane is
+gone or back at a shell, it is an **orphan**: it was left running when its pane went
+away, for example by `tmux kill-server`, and a fresh copy would die on its lock. The keeper
+SIGTERMs it, waits for it to exit, and only then starts the daemon in its pane. One that
+will not exit is reported and left alone. `topic daemons` shows it as `orphaned, pid N`.
 
 ### Slack — talk to a topic from a channel
 
@@ -433,9 +440,17 @@ cd ~/dev/claude-topics && ./install.sh
 topic --help
 ```
 
-`install.sh` builds `bin/topic` and links it, the plugin and a launchd agent into
-place — the plugin as a **symlink back into the repo**, so editing a skill takes
-effect immediately. Re-run it after changing anything under `cmd/`.
+`install.sh` builds `bin/topic`, **copies** it to `~/.local/bin/topic`, and puts the
+plugin and a launchd agent into place — the plugin as a **symlink back into the repo**,
+so editing a skill takes effect immediately. Re-run it after changing anything under
+`cmd/`: the installed binary is a copy, so a rebuild alone does not reach it.
+
+The binary is copied rather than linked because launchd runs it at login and it
+becomes the responsible process for every tmux session (see below). It has to live on
+the boot volume: if the repo is on an external drive, a symlink into it puts the
+Dispatcher behind macOS's Removable Volumes protection, which can block launchd from
+starting it and block every session from touching the repo. It is also the file a
+Full Disk Access grant names, so it should not move when the repo does.
 
 **Build with `make build` or `./install.sh`, never a bare `go build`** — see below.
 
@@ -443,7 +458,13 @@ To install into a second Claude Code profile, point `CLAUDE_CONFIG_DIR` at it:
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.claude-work ./install.sh
+./install.sh --all     # later: reinstall every profile that has an agent
 ```
+
+With `CLAUDE_CONFIG_DIR` unset, `install.sh` targets the default profile only if that
+is plainly meant: it already has an agent, or nothing is installed yet. On a machine
+where other profiles are installed and the default is not, it refuses rather than add
+a Dispatcher for a profile you do not use; pass `--default` if you do mean it.
 
 On **Windows**, from PowerShell (needs Go, and MSYS2 with `pacman -S tmux`):
 
@@ -515,8 +536,9 @@ that app directly.
 
 If you have already been living with this, the signed binary alone won't settle it:
 the running tmux server predates it, and its sessions are still parented onto the old
-one. From a terminal **outside tmux** — and note `kill-server` ends every session,
-including any daemons you run there:
+one. From a terminal **outside tmux** — `cycle down` puts every topic down and stops
+every registered daemon first, so `kill-server` orphans nothing it knows about (a process
+you started in tmux by hand is yours to stop):
 
 ```bash
 topic cycle down
@@ -525,11 +547,29 @@ tccutil reset All io.github.verveguy.topic
 topic cycle up
 ```
 
-To sign with a real Developer ID instead of ad-hoc:
+**Sign with a Developer ID if you grant `topic` anything.** An ad-hoc signature is
+enough for a denial to stick, but macOS records an ad-hoc binary's grants against its
+exact hash (`codesign -d -r- ~/.local/bin/topic` shows `designated => cdhash …`), so a
+grant silently stops applying after the next rebuild. A Developer ID signature is
+recorded against your team ID and identifier instead, and survives rebuilds. Put the
+identity in `.sign-identity` (gitignored, per machine) and every build uses it:
 
 ```bash
-TOPIC_SIGN_IDENTITY="Developer ID Application: You (TEAMID)" make build
+security find-identity -v -p codesigning        # list your identities
+echo "Developer ID Application: You (TEAMID)" > .sign-identity
+./install.sh
 ```
+
+`TOPIC_SIGN_IDENTITY=...` overrides it for one build.
+
+**When the repo lives on an external drive** (say `~/dev` on a Thunderbolt SSD), the
+sessions under `topic` need Full Disk Access to it, or new file access there can stall
+behind a permission prompt nobody sees, for example overnight with the screen locked.
+After signing with a Developer ID and installing:
+System Settings → Privacy & Security → Full Disk Access → **+** → ⌘⇧G →
+`~/.local/bin/topic`, then restart the tmux server (`topic cycle down && tmux
+kill-server && topic cycle up`). That grant covers every session, so weigh it against
+the advice above to deny.
 
 ### What it assumes
 

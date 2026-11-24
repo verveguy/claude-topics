@@ -6,9 +6,8 @@
 # no matter what you click. See README, "Why the binary is code-signed".
 
 TOPIC_IDENTIFIER    ?= io.github.verveguy.topic
-TOPIC_SIGN_IDENTITY ?= -
+# TOPIC_SIGN_IDENTITY: unset means scripts/build.sh reads .sign-identity, else ad-hoc.
 export TOPIC_IDENTIFIER
-export TOPIC_SIGN_IDENTITY
 
 .PHONY: all build test install doctor clean
 
