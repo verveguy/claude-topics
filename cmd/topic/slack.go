@@ -336,6 +336,7 @@ oauth_config:
       - chat:write
       - commands           # /topics
       - im:history         # answers to those DMs
+      - im:read            # who is in a DM, so replies there can mention them
       - im:write           # notify: a DM to the allowed users
       - reactions:write
       - users:read

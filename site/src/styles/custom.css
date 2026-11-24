@@ -1,0 +1,12 @@
+/* Stock Starlight, like the other v3rv.com project sites; only the accent is ours. */
+:root {
+  --sl-color-accent-low: #2a1f4d;
+  --sl-color-accent: #7a5cd6;
+  --sl-color-accent-high: #d9cff7;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e6dffa;
+  --sl-color-accent: #5a3cb8;
+  --sl-color-accent-high: #2e1f66;
+}

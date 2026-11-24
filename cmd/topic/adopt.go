@@ -42,6 +42,9 @@ type adoptOpts struct {
 	configDir, topicsRoot                            string
 }
 
+// unknownPid marks a session that is running but whose pid is not known.
+const unknownPid = "?"
+
 func (o adoptOpts) register(sid, dir, pid, note string) error {
 	if o.dry {
 		fmt.Printf("would adopt %q -> session %s… (%s, dir: %s)\n", o.name, truncate(sid, 8), note, dir)
@@ -49,9 +52,14 @@ func (o adoptOpts) register(sid, dir, pid, note string) error {
 	}
 	fields := []string{topicFile(o.topicsRoot, o.name),
 		"name", o.name, "dir", dir, "sessionId", sid, "generation", "1", "adoptedAt", nowISO()}
-	if pid != "" {
+	switch {
+	case pid == unknownPid:
+		// Running, but with no pid to check (a probe match): `up` refuses until
+		// the user asserts with --claim that the original has exited.
+		fields = append(fields, "state", "adopted")
+	case pid != "":
 		fields = append(fields, "state", "adopted", "adoptedPid", pid)
-	} else {
+	default:
 		// Nothing is running, so there is nothing to claim: an ordinary down topic.
 		fields = append(fields, "state", "down")
 	}
@@ -309,11 +317,11 @@ func (o adoptOpts) adoptByProbe() error {
 	if dir == "" {
 		dir, _ = os.UserHomeDir()
 	}
-	if err := o.register(uuid, dir, "", "probe match"); err != nil || o.dry {
+	if err := o.register(uuid, dir, unknownPid, "probe match"); err != nil || o.dry {
 		return err
 	}
 	fmt.Printf("Adopted %q -> session %s… (dir: %s)\n", o.name, truncate(uuid, 8), dir)
 	fmt.Println("  It is still running OUTSIDE topic management (no tmux, no --name).")
-	fmt.Printf("  `topic down %q` then `topic up %q` brings it fully under management.\n", o.name, o.name)
+	fmt.Printf("  Exit that session, then `topic up %q --claim` brings it under management.\n", o.name)
 	return nil
 }

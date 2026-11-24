@@ -136,7 +136,11 @@ if [[ $UNINSTALL -eq 1 ]]; then
     launchctl unload "$p" 2>/dev/null || true
     rm -f "$p"; say "removed $p"
   done
-  if [[ -L "$BIN/topic" ]] || is_our_binary "$BIN/topic"; then
+  # The binary is shared by every profile: keep it while another profile's agent uses it.
+  others=$(ls "$HOME"/Library/LaunchAgents/{io.github,com}.verveguy.claude-dispatcher*.plist 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$others" -gt 0 ]]; then
+    say "kept $BIN/topic: $others other profile agent(s) still use it"
+  elif [[ -L "$BIN/topic" ]] || is_our_binary "$BIN/topic"; then
     rm -f "$BIN/topic"; say "removed $BIN/topic"
   fi
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
@@ -165,12 +169,12 @@ link() {
   say "linked $dest -> $src"
 }
 
-# The JSON layer is a Go helper; build it before linking anything that needs it.
+# Build first: everything below installs or uses bin/topic.
 #
 # scripts/build.sh is the only supported build path: as well as compiling, it gives
 # the binary a stable code-signing identity, without which macOS re-asks for
 # permissions forever and blames `topic` for requests its children made. The script
-# explains the mechanism in full; README has the short version.
+# explains the mechanism in full; the docs site has the short version (running/signing).
 "$REPO/scripts/build.sh" || exit 1
 
 # topics-cycle became `topic cycle`; clear the stale symlink so it cannot shadow it.

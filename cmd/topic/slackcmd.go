@@ -26,7 +26,7 @@ const slackCommandHelp = "`/topics new <name> [dir] [--profile p]`  create a top
 	"`/topics unlink`  stop routing this channel\n" +
 	"`/topics up` · `down` · `restart`  this channel's topic\n" +
 	"`/topics stop`  interrupt what it is doing right now\n" +
-	"`/topics mode all|mention|team|listen`  `all`: every message goes to it; `mention`: only messages that @mention the bot, and threads it is in; " +
+	"`/topics mode all|mention|team|listen`  `all`: every message from someone who can direct it goes to it; `mention`: only messages that @mention the bot, and threads it is in; " +
 	"`team`: as mention, but it hears everyone in the channel and acts only for those it takes direction from; " +
 	"`listen`: as team, but it is sent every message as it is posted and may join in\n" +
 	"`/topics trust @someone…` · `untrust @someone…`  who else it takes direction from, in this channel only\n" +
@@ -189,7 +189,7 @@ func (h *hub) onCommand(user, channel, text string) string {
 		case h.topicUp(link):
 			state = "running, but not listening (needs `/topics restart`)"
 		}
-		mode := "every message goes to it"
+		mode := "every message from someone who can direct it goes to it"
 		switch link.Mode {
 		case modeMention:
 			mode = "only @mentions and its threads go to it"
@@ -221,7 +221,7 @@ func (h *hub) onCommand(user, channel, text string) string {
 		case "listen":
 			mode = modeListen
 		default:
-			return "`/topics mode all` (every message goes to the topic), `/topics mode mention` (only @mentions and its threads), " +
+			return "`/topics mode all` (every message from those who can direct the topic goes to it), `/topics mode mention` (only @mentions and its threads), " +
 				"`/topics mode team` (as mention, hearing everyone) or `/topics mode listen` (as team, sent every message as it is posted)"
 		}
 		if err := updateLink(h.home, channel, func(l *slackLink) { l.Mode = mode }); err != nil {
@@ -237,7 +237,7 @@ func (h *hub) onCommand(user, channel, text string) string {
 		} else if mode == modeMention {
 			h.say(channel, fmt.Sprintf("<@%s> set this channel to mention mode: *%s* hears messages that @mention <@%s>, and replies in threads it is in. The rest reaches it as context when it is next addressed.", user, link.Topic, h.botUser))
 		} else {
-			h.say(channel, fmt.Sprintf("<@%s> set this channel so every message goes to *%s*.", user, link.Topic))
+			h.say(channel, fmt.Sprintf("<@%s> set this channel so every message from someone who can direct *%s* goes to it.", user, link.Topic))
 		}
 		return "Done."
 	case "trust", "untrust":

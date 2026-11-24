@@ -21,12 +21,16 @@ what makes hand-off possible.
 
   topic up   "<name>" [dir]   Pick up: resume the topic's session, or start one.
                               --seed-from <file> starts a NEW topic from a brief.
+                              --claim takes over an adopted session once you have
+                              exited the original (see adopt).
                               -- <claude args...> records extra claude arguments
                               that every launch of this topic adds (see set-args).
   topic down "<name>"         Put down: terminate the session, stay resumable.
   topic down-all              Put every live topic in this profile down. Skips the
                               calling session unless --include-self. --dry-run.
-  topic list [--all]          Show every topic and whether it is up or down.
+                              --remember marks them for cycle up to restore.
+  topic list [--all]          Show every topic: UP, ADOPTED (running outside
+                              tmux) or down. Alias: ls.
                               --all crosses every profile on the machine.
   topic status "<name>"       Detail for one topic.
   topic ui                    Browse topics: a list grouped by working directory on
@@ -39,9 +43,9 @@ what makes hand-off possible.
                               non-topic tmux sessions, e.g. "fabrik*".
                               --remove-session "<name or glob>" takes one back out.
                               Each launch is its own instance: --list shows them,
-                              --attach [ID] reattaches, --quit [ID] | --all closes
-                              them. C-a q closes the one you are in; topics keep
-                              running.
+                              --attach [ID] reattaches, --quit [ID] closes one and
+                              --quit --all closes every one. C-a q closes the one
+                              you are in; topics keep running.
   topic set-args "<name>" -- <claude args...>  |  --clear
                               Replace (or clear) the extra claude arguments every
                               launch of this topic adds — up, handoff, fork, move,
@@ -51,39 +55,46 @@ what makes hand-off possible.
   topic forget "<name>"       Stop tracking a topic (keeps handoff docs; --purge
                               removes them). The session itself is untouched.
   topic prune                 Show topics that are truly dead — down, with no
-                              transcript left to resume. --yes removes them.
+                              transcript left to resume. --yes (-y) removes them;
+                              --purge removes their handoff docs too.
   topic adopt "<name>"        Track a session topic did not launch — live (via
-                              --dry-run shows what it would adopt, changing nothing.
-                              ~/.claude/sessions/<pid>.json) or merely resumable
+                              <profile>/sessions/<pid>.json) or merely resumable
                               (via its transcript title). --pid / --dir / --title
-                              disambiguate; --probe <token> handles a running but
-                              unnamed session.
+                              disambiguate; --session-id <uuid> names one directly;
+                              --probe <token> [--exclude <uuid>] handles a running
+                              but unnamed session. --dry-run shows what it would
+                              adopt, changing nothing.
 
   topic handoff-path "<name>" Print where the handoff doc must be written.
-  topic handoff-swap "<name>" Retire the old session, start a fresh one seeded
-                              with the handoff doc, same topic name.
+  topic handoff-swap "<name>" [doc]
+                              Retire the old session, start a fresh one seeded
+                              with the handoff doc (default: the newest), same
+                              topic name. --focus "<text>" says what to start on.
 
   topic fork-path "<new>"     Print where the fork brief must be written.
   topic fork "<new>" [dir]    Split a thread into its own topic, seeded with that
-                              brief. --from "<parent>" defaults to the calling
-                              topic; the directory defaults to the parent's.
+                              brief (or --brief <file>). --from "<parent>"
+                              defaults to the calling topic; the directory
+                              defaults to the parent's.
                               Inherits the parent's claude args unless
                               --no-inherit-args, or -- <claude args...> replaces them.
   topic whoami                Name the topic the caller is sitting in.
 
   topic profiles              Every Claude Code profile, and its topic count.
   topic move "<name>" --to <profile>
-                              (--carry-approvals copies your trust / external-import
-                              answers for its directory into the destination.)
                               Move a topic — registry, docs, and transcripts — into
                               another profile. A live topic is put down and brought
                               back up on the far side (--stay-down to leave it down).
                               --copy leaves the original, --dry-run shows the plan.
+                              --carry-approvals copies your trust / external-import
+                              answers for its directory into the destination;
+                              --force moves without them and leaves it down.
+                              --keep-bridge keeps its Remote Control identity.
 
   topic rename "<old>" "<new>"
                               Rename a topic everywhere: registry, tmux, peer name,
-                              Claude UI name, and transcript title.
-  topic rebridge "<name>"|--all [--down-only]
+                              Claude UI name, and transcript title. --dry-run.
+  topic rebridge "<name>"|--all [--down-only] [--dry-run]
                               Drop a session's recorded Remote Control bridge so the
                               next launch registers a fresh one — under the current
                               profile's account, named after the topic.
@@ -96,10 +107,13 @@ what makes hand-off possible.
                               --all-profiles covers every profile. From inside a
                               topic (the Dispatcher) it runs in the background.
 
-  topic cycle down | up       Take every profile's topics down cleanly, and bring
-                              them back — agents included. Two verbs, because the
-                              point is what you do in between (log in/out, upgrade).
-                              cycle up restores the topics cycle down put down.
+  topic cycle down | up | profiles  [--dry-run]
+                              Take every profile's topics and daemons down cleanly,
+                              and bring them back — agents included. Two verbs,
+                              because the point is what you do in between (log
+                              in/out, upgrade). cycle up restores the topics cycle
+                              down put down. "Every profile" is every profile with
+                              an installed agent: cycle profiles lists them.
   topic ensure-dispatcher     Start the Dispatcher topic if it is not up, and restart
                               this profile's registered daemons that are down.
                               (Run by launchd at login and every 5 minutes.)

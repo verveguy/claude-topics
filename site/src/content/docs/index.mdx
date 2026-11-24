@@ -1,0 +1,83 @@
+---
+title: Overview
+description: Pick up, put down, and hand off long-running Claude Code work — from anywhere, including your phone.
+template: splash
+hero:
+  title: claude-topics
+  tagline: Give long-running Claude Code work a stable name. Pick it up, put it down, hand it to a fresh session or split it in two, from your desk, over SSH, or from your phone.
+  actions:
+    - text: Install it
+      link: /claude-topics/start/install
+      icon: right-arrow
+    - text: Your first topic
+      link: /claude-topics/start/first-topic
+      icon: open-book
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/verveguy/claude-topics
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## The problem it solves
+
+You leave Claude Code sessions running for a week so you can carry on from your phone while
+travelling. Two things go wrong:
+
+1. **Context rots.** A week-old session is cluttered with detail that no longer matters, but you
+   don't want to lose the thread.
+2. **You can't start new work remotely.** If you need a session that isn't already running, you
+   are stuck until you are back at the machine.
+
+`topic` fixes both by making the unit of work a **topic** rather than a session. A topic is a
+stable name ("Fantasy Economics"). The session underneath it is resumed, retired or replaced;
+the name stays.
+
+```bash
+topic up   "Fantasy Economics" ~/dev/fantasy   # pick up: resume its session, or start one
+topic down "Fantasy Economics"                 # put down: lossless, resumable
+topic list                                     # what's up, what's down
+```
+
+## What's in it
+
+<CardGrid>
+  <Card title="The topic CLI" icon="seti:go">
+    One Go binary. Each topic runs in a detached tmux session with Remote Control, so you reach
+    it from a terminal, over SSH, from claude.ai or from your phone.
+    [The basics](/claude-topics/topics/basics)
+  </Card>
+  <Card title="Hand off and fork" icon="random">
+    Retire a cluttered session and start a fresh one seeded with a handoff document, under the
+    same name. Or split a thread out into a topic of its own.
+    [Hand off](/claude-topics/topics/handoff) · [Fork](/claude-topics/topics/fork)
+  </Card>
+  <Card title="The Dispatcher" icon="rocket">
+    One always-up topic per profile whose job is running `topic` commands for the others, so you
+    can start work from your phone when nothing else is up.
+    [The Dispatcher](/claude-topics/running/dispatcher)
+  </Card>
+  <Card title="Slack" icon="slack">
+    Link a Slack channel to a topic and talk to it there, alone or with your team, with a
+    per-channel list of who it takes direction from.
+    [Slack](/claude-topics/slack/setup)
+  </Card>
+  <Card title="The topics plugin" icon="puzzle">
+    Skills (`handoff`, `fork`, `topic-manage`) that teach Claude the procedures, so you can just
+    say "hand this off" or "pick up Fantasy Images".
+    [Skills](/claude-topics/reference/skills)
+  </Card>
+  <Card title="Daemons, cycling, restore" icon="setting">
+    Keep non-Claude processes up alongside your topics, take everything down and back cleanly,
+    and bring back what a crash took down.
+    [Keeping it running](/claude-topics/running/daemons)
+  </Card>
+</CardGrid>
+
+## What it runs on
+
+macOS or Windows (with MSYS2's tmux), `tmux`, `claude`, and Go to build it. Everything except
+the always-up Dispatcher is plain tmux and Claude Code, so most of it would work on Linux too.
+See [Install](/claude-topics/start/install).

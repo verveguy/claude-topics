@@ -85,7 +85,7 @@ not exist for the child unless you write it down.
 
 ## Notes
 
-- Briefs live permanently in `~/.claude/topics/<slug>/briefs/`, separate from
+- Briefs live permanently in `<profile>/topics/<slug>/briefs/`, separate from
   `handoffs/`. The child records `seededFrom` and `forkedFrom`; the parent records
   the child in `forks`. `topic status` shows both directions.
 - `topic fork` refuses if the new topic already has a session — pick another name, or
