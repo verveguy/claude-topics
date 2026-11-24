@@ -48,7 +48,7 @@ install_it() {
     git clone --quiet "$REPO_URL" "$REPO_DIR"
   fi
 
-  # install.sh builds the binary, links it, and installs the launchd agent for the
+  # install.sh builds the binary, installs a signed copy, and installs the launchd agent for the
   # ACTIVE profile — it honours CLAUDE_CONFIG_DIR just as `topic` itself does. On Windows
   # (Git Bash / MSYS2) install.ps1 does the same with a Task Scheduler task.
   case "$(uname -s)" in

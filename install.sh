@@ -169,7 +169,7 @@ link() {
   say "linked $dest -> $src"
 }
 
-# The JSON layer is a Go helper; build it before linking anything that needs it.
+# Build first: everything below installs or uses bin/topic.
 #
 # scripts/build.sh is the only supported build path: as well as compiling, it gives
 # the binary a stable code-signing identity, without which macOS re-asks for

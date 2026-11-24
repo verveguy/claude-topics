@@ -1,5 +1,4 @@
-/bin/*
-!/bin/topics-cycle
+/bin/
 .DS_Store
 .sign-identity
 /topic
