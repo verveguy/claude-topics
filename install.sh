@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# install.sh — link this repo into the places Claude Code and launchd look.
+# install.sh — install this repo into the places Claude Code and launchd look.
 #
-# Everything is installed as a SYMLINK back into the repo, so editing a script
-# here takes effect immediately with no reinstall step.
+# The plugin is a SYMLINK back into the repo, so editing a skill takes effect
+# immediately. The `topic` binary is a signed COPY in ~/.local/bin, not a symlink:
+# launchd runs it at login and it becomes the responsible process for every tmux
+# session, so it must live on the boot volume (a repo on an external drive is behind
+# macOS's Removable Volumes gate) and be the file any Full Disk Access grant names.
+# Re-run after changing anything under cmd/.
 #
-#   ./install.sh            install (refuses to clobber non-symlink files)
+#   ./install.sh            install into the active profile (CLAUDE_CONFIG_DIR)
+#   ./install.sh --all      reinstall every profile that already has an agent
+#   ./install.sh --default  allow installing the default profile (see below)
 #   ./install.sh --force    replace existing files, backing them up to *.bak
 #   ./install.sh --uninstall
 set -euo pipefail
@@ -31,16 +37,97 @@ PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 LEGACY_PLIST="$HOME/Library/LaunchAgents/com.verveguy.claude-dispatcher$PROFILE_SUFFIX.plist"
 LOG_PATH="$HOME/Library/Logs/claude-dispatcher$PROFILE_SUFFIX.log"
 
-FORCE=0; UNINSTALL=0
+FORCE=0; UNINSTALL=0; ALL=0; DEFAULT_OK=0
 for a in "$@"; do
   case "$a" in
     --force) FORCE=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --all) ALL=1 ;;
+    --default) DEFAULT_OK=1 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
 
 say() { printf '  %s\n' "$*"; }
+
+AGENTS_DIR="$HOME/Library/LaunchAgents"
+
+# --all: re-run this script once per installed Dispatcher agent, with the profile
+# that agent was rendered for. The agent's own EnvironmentVariables are the record
+# of which profile it serves; no CLAUDE_CONFIG_DIR there means the default profile.
+if [[ $ALL -eq 1 ]]; then
+  [[ $UNINSTALL -eq 1 ]] && { echo "--all and --uninstall cannot be combined" >&2; exit 2; }
+  pass=(); [[ $FORCE -eq 1 ]] && pass+=(--force)
+  shopt -s nullglob
+  plists=("$AGENTS_DIR"/io.github.verveguy.claude-dispatcher*.plist)
+  [[ ${#plists[@]} -gt 0 ]] || { echo "--all: no Dispatcher agents installed; run ./install.sh first" >&2; exit 1; }
+  for p in "${plists[@]}"; do
+    dir="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CLAUDE_CONFIG_DIR' "$p" 2>/dev/null || true)"
+    echo "== $(basename "$p" .plist)"
+    if [[ -n "$dir" ]]; then
+      CLAUDE_CONFIG_DIR="$dir" bash "$REPO/install.sh" "${pass[@]+"${pass[@]}"}"
+    else
+      env -u CLAUDE_CONFIG_DIR bash "$REPO/install.sh" --default "${pass[@]+"${pass[@]}"}"
+    fi
+  done
+  exit 0
+fi
+
+# Guard the default profile. Forgetting CLAUDE_CONFIG_DIR is the easy mistake on a
+# multi-profile machine, and it would quietly add a Dispatcher agent (and a
+# Dispatcher) for a profile you do not use. So with CLAUDE_CONFIG_DIR unset, go ahead
+# only when that is plainly meant: the default profile is already installed, nothing
+# is installed yet (a first install), or --default says so.
+if [[ "$CLAUDE_DIR" == "$HOME/.claude" && $DEFAULT_OK -eq 0 ]]; then
+  shopt -s nullglob
+  others=("$AGENTS_DIR"/io.github.verveguy.claude-dispatcher-*.plist)
+  shopt -u nullglob
+  if [[ ! -f "$PLIST_DEST" && ! -f "$LEGACY_PLIST" && ${#others[@]} -gt 0 ]]; then
+    echo "install.sh: CLAUDE_CONFIG_DIR is unset, so this would target the default profile" >&2
+    echo "  (~/.claude), which has no Dispatcher agent here. Installed profiles:" >&2
+    for p in "${others[@]}"; do
+      echo "    $(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CLAUDE_CONFIG_DIR' "$p" 2>/dev/null || basename "$p")" >&2
+    done
+    echo "  Pick one:  CLAUDE_CONFIG_DIR=~/.claude-<profile> ./install.sh" >&2
+    echo "  Or all:    ./install.sh --all" >&2
+    echo "  Or, if you really mean the default profile:  ./install.sh --default" >&2
+    exit 1
+  fi
+fi
+
+TOPIC_ID="${TOPIC_IDENTIFIER:-io.github.verveguy.topic}"
+
+# is_our_binary <path>: a regular file signed with topic's identifier.
+is_our_binary() {
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  [[ "$(codesign -d --verbose=2 "$1" 2>&1 | sed -n 's/^Identifier=//p')" == "$TOPIC_ID" ]]
+}
+
+# install_bin <src> <dest>: copy a signed binary into place.
+#
+# Atomic on purpose: the copy lands beside <dest> and is renamed over it. Writing
+# into the existing file instead would modify pages of a running, code-signed
+# binary (the Dispatcher agents run it every 5 minutes) and macOS kills the
+# process with "Code Signature Invalid".
+install_bin() {
+  local src="$1" dest="$2"
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    if [[ ! -L "$dest" ]] && cmp -s "$src" "$dest"; then
+      say "ok (up to date): $dest"; return 0
+    fi
+    if [[ $FORCE -eq 0 && ! -L "$dest" ]] && ! is_our_binary "$dest"; then
+      echo "refusing to overwrite unrecognised file: $dest (use --force)" >&2; return 1
+    fi
+    if [[ $FORCE -eq 1 && ! -L "$dest" ]] && ! is_our_binary "$dest"; then
+      cp -p "$dest" "$dest.bak"; say "backed up -> $dest.bak"
+    fi
+  fi
+  mkdir -p "$(dirname "$dest")"
+  local tmp="$dest.new.$$"
+  cp -p "$src" "$tmp"
+  mv -f "$tmp" "$dest"
+  say "installed $dest (copy of $src)"
+}
 
 if [[ $UNINSTALL -eq 1 ]]; then
   echo "Uninstalling…"
@@ -49,7 +136,9 @@ if [[ $UNINSTALL -eq 1 ]]; then
     launchctl unload "$p" 2>/dev/null || true
     rm -f "$p"; say "removed $p"
   done
-  [[ -L "$BIN/topic" ]] && { rm -f "$BIN/topic"; say "removed $BIN/topic"; }
+  if [[ -L "$BIN/topic" ]] || is_our_binary "$BIN/topic"; then
+    rm -f "$BIN/topic"; say "removed $BIN/topic"
+  fi
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }
   [[ -L "$PLUGIN_DEST" ]] && { rm -f "$PLUGIN_DEST"; say "removed $PLUGIN_DEST"; }
   echo
@@ -90,7 +179,7 @@ link() {
 echo "Installing from $REPO"
 say "profile: $CLAUDE_DIR"
 mkdir -p "$BIN"
-link "$REPO/bin/topic"          "$BIN/topic"
+install_bin "$REPO/bin/topic"   "$BIN/topic"
 
 link "$REPO/plugin"    "$PLUGIN_DEST"
 

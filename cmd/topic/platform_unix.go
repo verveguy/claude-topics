@@ -105,3 +105,22 @@ func agentEnableCmd(path string) []string { return []string{"launchctl", "load",
 func replaceProcess(path string, args []string) error {
 	return syscall.Exec(path, args, os.Environ())
 }
+
+// procLookup reports a process's command name and start time, or ok=false if it is
+// gone.
+func procLookup(pid int) (name, start string, ok bool) {
+	out, err := exec.Command("ps", "-o", "lstart=,comm=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return "", "", false
+	}
+	line := strings.TrimSpace(string(out))
+	// lstart is five fields: "Sun Nov 22 15:14:56 2026".
+	f := strings.Fields(line)
+	if len(f) < 6 {
+		return "", "", false
+	}
+	return strings.Join(f[5:], " "), strings.Join(f[:5], " "), true
+}
+
+// procTerminate asks a process to shut down cleanly.
+func procTerminate(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }

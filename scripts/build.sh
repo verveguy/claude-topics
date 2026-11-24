@@ -22,8 +22,12 @@
 #
 # Overrides:
 #   TOPIC_IDENTIFIER     signing identifier (default: io.github.verveguy.topic)
-#   TOPIC_SIGN_IDENTITY  codesign -s value; "-" is ad-hoc, which is enough for TCC.
-#                        Set to a Developer ID to sign a binary for distribution.
+#   TOPIC_SIGN_IDENTITY  codesign -s value. Default: the first line of .sign-identity
+#                        at the repo root (gitignored, per machine), else "-" (ad-hoc).
+#                        Ad-hoc is enough for a Don't Allow to stick, but macOS pins an
+#                        ad-hoc binary's grants to its exact hash, so a Full Disk Access
+#                        grant is lost on every rebuild. A Developer ID keeps it:
+#                          echo "Developer ID Application: You (TEAMID)" > .sign-identity
 #   TOPIC_OUT            output path (default: bin/topic)
 
 set -euo pipefail
@@ -31,7 +35,11 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${TOPIC_OUT:-$REPO/bin/topic}"
 ID="${TOPIC_IDENTIFIER:-io.github.verveguy.topic}"
-SIGN_IDENTITY="${TOPIC_SIGN_IDENTITY:--}"
+SIGN_IDENTITY="${TOPIC_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" && -f "$REPO/.sign-identity" ]]; then
+  SIGN_IDENTITY="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;}' "$REPO/.sign-identity")"
+fi
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 command -v go >/dev/null || {
   echo "build: go not found on PATH — needed to build bin/topic" >&2
@@ -65,4 +73,6 @@ if [[ "$got" != "$ID" ]]; then
   exit 1
 fi
 
-echo "built $OUT (Identifier=$got)"
+kind="ad-hoc"
+[[ "$SIGN_IDENTITY" != "-" ]] && kind="$SIGN_IDENTITY"
+echo "built $OUT (Identifier=$got, signed: $kind)"
