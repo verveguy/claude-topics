@@ -357,6 +357,29 @@ away, for example by `tmux kill-server`, and a fresh copy would die on its lock.
 SIGTERMs it, waits for it to exit, and only then starts the daemon in its pane. One that
 will not exit is reported and left alone. `topic daemons` shows it as `orphaned, pid N`.
 
+### Slack — talk to a topic from a channel
+
+Each Slack channel can be linked to one topic. Messages there reach the topic's session, and
+it answers in the channel:
+
+```bash
+topic slack setup                                   # once: Slack home, app manifest, hub daemon
+topic slack link "Fantasy Economics" <channel link> # or, in Slack: /topics link Fantasy Economics
+topic slack status                                  # the hub, each link, and who is listening
+```
+
+In Slack, `/topics new <name>` creates a topic and links the channel to it in one step.
+`/topics up`, `down`, `restart` and `status` act on the channel's topic. A message to a topic
+that is down is held: reply `up` and the topic starts and gets it. Only the Slack users in
+`SLACK_ALLOWED_USERS` reach a topic or run `/topics`, and a topic's tools post only to its
+own channel. Tool-approval prompts appear in the channel with Allow/Deny buttons.
+
+One **hub** per machine (the `Slack Hub` daemon) holds the Slack connection and routes each
+channel to its topic. It uses Socket Mode, an outbound connection, so nothing on the machine
+is exposed. In every session the profile runs, a small **shim** (an MCP channel server) finds
+its topic and registers with the hub. [The guide](docs/guide.md#slack) has the setup, the
+trust model and the details.
+
 ### `topic ui` — browse topics side by side
 
 ```bash

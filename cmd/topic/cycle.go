@@ -101,12 +101,10 @@ func plistConfigDir(path string) string {
 // inProfile runs a topic command against one profile. CLAUDE_CONFIG_DIR is *unset* for
 // the default profile: setting it to ~/.claude selects a different, un-onboarded
 // config file.
-func inProfile(configDir string, args ...string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(self, args...)
+// envForProfile is this process's environment with configDir as the active profile:
+// CLAUDE_CONFIG_DIR set, or absent for the default profile (never set to ~/.claude,
+// which claude reads as a different config), and any CLAUDE_TOPICS_ROOT dropped.
+func envForProfile(configDir string) []string {
 	home, _ := os.UserHomeDir()
 	var env []string
 	for _, e := range os.Environ() {
@@ -117,7 +115,16 @@ func inProfile(configDir string, args ...string) error {
 	if configDir != filepath.Join(home, ".claude") {
 		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	cmd.Env = env
+	return env
+}
+
+func inProfile(configDir string, args ...string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(self, args...)
+	cmd.Env = envForProfile(configDir)
 	out, _ := cmd.CombinedOutput()
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		if line != "" {

@@ -114,6 +114,10 @@ what makes hand-off possible.
   topic daemon stop|start|remove "<name>"
                               Stop on purpose (the keeper then leaves it down), start
                               again, or drop it from the registry.
+  topic slack setup|link|unlink|status
+                              Chat with topics from Slack, one channel per topic.
+                              setup once, then: topic slack link "<name>" <channel>.
+                              A message to a down topic can start it (reply up).
   topic doctor                Whether this binary can hold a macOS permission
                               decision — run it if a dialog keeps naming ` + "`topic`" + `.
 
@@ -250,6 +254,8 @@ func main() {
 		err = cmdRestore(withProfile(args))
 	case "session-ended":
 		err = cmdSessionEnded(args)
+	case "slack":
+		err = cmdSlack(withProfile(args))
 	case "ensure-dispatcher":
 		// The launchd path, and the one that creates the tmux server after a reboot —
 		// so this is where an unsigned binary does its damage. The warning lands in
