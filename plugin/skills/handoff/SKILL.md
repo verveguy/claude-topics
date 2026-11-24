@@ -131,7 +131,7 @@ resume the same session UUID and corrupt the transcript.
 
 ## Notes
 
-- Handoff docs are kept permanently in `~/.claude/topics/<slug>/handoffs/`. Reading an
+- Handoff docs are kept permanently in `<profile>/topics/<slug>/handoffs/`. Reading an
   older one is a legitimate way to recover context that a handoff dropped.
 - `topic handoff-swap` refuses to run if the handoff doc is missing or empty.
 - Retired session UUIDs are archived in the topic's `history`, so an old session is
