@@ -48,12 +48,18 @@ command -v go >/dev/null || {
 
 # -X stamps the identifier into the binary so it can tell, at runtime and without
 # shelling out to codesign, that it was built through here. `topic doctor` reads it.
+# Build and sign a temporary file, and only move it to $OUT once the signature is
+# verified: a failed run must not leave an unsigned binary where the last good one was.
 mkdir -p "$(dirname "$OUT")"
+FINAL="$OUT"
+OUT="$FINAL.build.$$"
+trap 'rm -f "$OUT"' EXIT
 (cd "$REPO" && go build -ldflags "-X main.signedIdentifier=$ID" -o "$OUT" ./cmd/topic)
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   # TCC is a macOS concept; elsewhere the build is simply done.
-  echo "built $OUT"
+  mv -f "$OUT" "$FINAL"
+  echo "built $FINAL"
   exit 0
 fi
 
@@ -75,4 +81,5 @@ fi
 
 kind="ad-hoc"
 [[ "$SIGN_IDENTITY" != "-" ]] && kind="$SIGN_IDENTITY"
-echo "built $OUT (Identifier=$got, signed: $kind)"
+mv -f "$OUT" "$FINAL"
+echo "built $FINAL (Identifier=$got, signed: $kind)"

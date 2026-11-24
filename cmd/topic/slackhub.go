@@ -508,7 +508,7 @@ func (h *hub) onDM(m slackMessage) {
 		_, _ = h.slack.post(m.channel, m.thread, fmt.Sprintf("*%s* is not listening right now. Try it in <#%s>.", link.Topic, channel), nil)
 		return
 	}
-	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user, "dm": "true"}
+	meta := map[string]string{"channel": m.channel, "ts": m.ts, "user": h.slack.userName(m.user), "user_id": m.user, "dm": "true", "directs": "true"}
 	if m.thread != "" {
 		meta["thread_ts"] = m.thread
 	}

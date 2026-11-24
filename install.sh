@@ -136,7 +136,11 @@ if [[ $UNINSTALL -eq 1 ]]; then
     launchctl unload "$p" 2>/dev/null || true
     rm -f "$p"; say "removed $p"
   done
-  if [[ -L "$BIN/topic" ]] || is_our_binary "$BIN/topic"; then
+  # The binary is shared by every profile: keep it while another profile's agent uses it.
+  others=$(ls "$HOME"/Library/LaunchAgents/{io.github,com}.verveguy.claude-dispatcher*.plist 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$others" -gt 0 ]]; then
+    say "kept $BIN/topic: $others other profile agent(s) still use it"
+  elif [[ -L "$BIN/topic" ]] || is_our_binary "$BIN/topic"; then
     rm -f "$BIN/topic"; say "removed $BIN/topic"
   fi
   [[ -L "$BIN/topics-cycle" ]] && { rm -f "$BIN/topics-cycle"; say "removed $BIN/topics-cycle"; }

@@ -189,6 +189,27 @@ func TestAdoptBySessionIdDerivesDirFromTranscript(t *testing.T) {
 	}
 }
 
+// A probe match is a session running outside tmux with no pid on record. It must be
+// recorded as adopted, so `up` refuses to resume it in a second process until the user
+// asserts with --claim that the original has exited. (It used to be recorded as down.)
+func TestAdoptByProbeMustBeClaimed(t *testing.T) {
+	e := newEnv(t)
+	e.seedTranscript("-tmp-probed", "probed-sid", []string{
+		`{"type":"user","cwd":"/tmp/probed","message":{"content":"probe-token-123"}}`,
+	})
+
+	e.mustRun("adopt", "Probed", "--probe", "probe-token-123")
+
+	if got := e.readTopic("probed"); got["state"] != "adopted" {
+		t.Fatalf("state = %v, want adopted: the session is still running", got["state"])
+	}
+	r := e.run("up", "Probed")
+	if r.code == 0 {
+		t.Fatal("up resumed a probe-adopted session without --claim")
+	}
+	mustContain(t, r.out(), "--claim", "should say how to claim it")
+}
+
 func TestPrunePurgeRemovesDocuments(t *testing.T) {
 	e := newEnv(t)
 	e.seedTopic("gone", map[string]any{"name": "Gone", "dir": "/tmp", "sessionId": "nope"})

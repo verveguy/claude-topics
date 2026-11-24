@@ -53,7 +53,7 @@ func signingNotice() string {
 	}
 	return "topic: built without a stable code-signing identity, so macOS will re-ask for\n" +
 		"       permissions forever (and name `topic` for requests it did not make).\n" +
-		"       Rebuild with `make build`.  Detail: topic doctor"
+		"       Reinstall from the repo with `./install.sh --all`.  Detail: topic doctor"
 }
 
 // warnIfUnsigned prints that notice on stderr. Called from the commands that create
@@ -116,7 +116,7 @@ func cmdDoctor(_ []string) error {
 		fmt.Println("  decision against, so every dialog naming `topic` will come back —")
 		fmt.Println("  whether you click Allow or Don't Allow.")
 		fmt.Println()
-		fmt.Println("  Fix:  make build")
+		fmt.Println("  Fix:  ./install.sh --all   (from the repo: builds signed, then installs the copy)")
 		fmt.Println()
 		fmt.Println("  Then restart the tmux server so sessions are re-parented onto the")
 		fmt.Println("  signed binary. cycle down puts topics down and stops registered")
@@ -127,7 +127,7 @@ func cmdDoctor(_ []string) error {
 
 	case signedIdentifier != "" && actual != signedIdentifier:
 		fmt.Printf("  PROBLEM: signed as %q but built expecting %q.\n", actual, signedIdentifier)
-		fmt.Println("  Something re-signed this binary after the build. Rebuild: make build")
+		fmt.Println("  Something re-signed this binary after the build. Reinstall: ./install.sh --all")
 
 	default:
 		fmt.Println("  OK: this binary can hold a permission decision.")
