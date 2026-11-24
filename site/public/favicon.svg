@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Stacked topics: three cards, the front one live. -->
+  <rect x="4" y="4" width="56" height="56" rx="13" fill="#5a3cb8"/>
+  <rect x="20" y="14" width="30" height="8" rx="3" fill="#fff" opacity=".45"/>
+  <rect x="16" y="26" width="34" height="8" rx="3" fill="#fff" opacity=".7"/>
+  <rect x="12" y="38" width="38" height="12" rx="3" fill="#fff"/>
+  <circle cx="19" cy="44" r="2.6" fill="#5a3cb8"/>
+</svg>

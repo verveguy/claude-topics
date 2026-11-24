@@ -44,8 +44,8 @@ what makes hand-off possible.
                               --remove-session "<name or glob>" takes one back out.
                               Each launch is its own instance: --list shows them,
                               --attach [ID] reattaches, --quit [ID] closes one and
-                              --quit --all closes every one. C-a q closes the one you are in; topics keep
-                              running.
+                              --quit --all closes every one. C-a q closes the one
+                              you are in; topics keep running.
   topic set-args "<name>" -- <claude args...>  |  --clear
                               Replace (or clear) the extra claude arguments every
                               launch of this topic adds — up, handoff, fork, move,

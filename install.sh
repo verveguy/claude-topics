@@ -174,7 +174,7 @@ link() {
 # scripts/build.sh is the only supported build path: as well as compiling, it gives
 # the binary a stable code-signing identity, without which macOS re-asks for
 # permissions forever and blames `topic` for requests its children made. The script
-# explains the mechanism in full; README has the short version.
+# explains the mechanism in full; the docs site has the short version (running/signing).
 "$REPO/scripts/build.sh" || exit 1
 
 # topics-cycle became `topic cycle`; clear the stale symlink so it cannot shadow it.

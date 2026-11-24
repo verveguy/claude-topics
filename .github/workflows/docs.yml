@@ -1,0 +1,55 @@
+# The docs site (site/) on GitHub Pages: https://v3rv.com/claude-topics
+name: Docs site
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['site/**', '.github/workflows/docs.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install pnpm
+        run: npm i -g pnpm@10.33.0
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      # Also checks every internal link (starlight-links-validator)
+      - name: Build
+        run: pnpm build
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
+        with:
+          path: site/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ${{ vars.LIGHT_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      pages: write
+      id-token: write
+    # One deployment at a time, never cancelling one that has started. Only here, not on the
+    # build: a PR build in the same group could replace a queued deploy, which then never runs.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

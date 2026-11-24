@@ -1,0 +1,14 @@
+# Dependencies
+/node_modules
+
+# Production
+/dist
+
+# Generated files
+.astro
+
+# Misc
+.DS_Store
+.env.local
+
+npm-debug.log*

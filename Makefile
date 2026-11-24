@@ -3,7 +3,7 @@
 # Always build through here (or scripts/build.sh directly). A bare `go build` produces
 # a binary whose code-signing identifier is `a.out`, which macOS cannot key a
 # permission decision against — so every TCC dialog naming `topic` comes back forever,
-# no matter what you click. See README, "Why the binary is code-signed".
+# no matter what you click. See https://v3rv.com/claude-topics/running/signing
 
 TOPIC_IDENTIFIER    ?= io.github.verveguy.topic
 # TOPIC_SIGN_IDENTITY: unset means scripts/build.sh reads .sign-identity, else ad-hoc.

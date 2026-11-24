@@ -17,8 +17,8 @@
 #   against it. The stored answer stays "unknown" and the dialog comes back forever,
 #   whether the user clicked Allow or Don't Allow.
 #
-# A stable identifier is what lets one answer stick. See README, "Why the binary is
-# code-signed".
+# A stable identifier is what lets one answer stick. See
+# https://v3rv.com/claude-topics/running/signing
 #
 # Overrides:
 #   TOPIC_IDENTIFIER     signing identifier (default: io.github.verveguy.topic)
